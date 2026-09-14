@@ -18,18 +18,23 @@ class ForecastTests(unittest.TestCase):
         self.assertEqual(analyse(budget(balance=D("10000")))["method"], "full_payment")
 
     def test_bill_before_salary_prevents_immediate_purchase(self):
-        result = analyse(budget(balance=D("1200"), allows_partial=False, allows_installments=False))
+        result = analyse(budget(balance=D("1400"), allows_partial=False, allows_installments=False))
         self.assertEqual(result["method"], "wait")
-        self.assertTrue(simulate(budget(balance=D("1200")), result["payments"])[0])
+        self.assertTrue(simulate(budget(balance=D("1400")), result["payments"])[0])
+
+    def test_wait_cannot_fix_a_shortfall_before_payday(self):
+        result = analyse(budget(balance=D("1200"), allows_partial=False, allows_installments=False))
+        self.assertEqual(result["method"], "not_recommended")
+        self.assertIsNone(result["earliest"])
 
     def test_deadline_is_enforced(self):
-        result = analyse(budget(balance=D("1200"), deadline=date(2026, 1, 2),
+        result = analyse(budget(balance=D("1400"), deadline=date(2026, 1, 2),
                                 allows_partial=False, allows_installments=False))
         self.assertEqual(result["method"], "not_recommended")
         self.assertEqual(result["payments"], [])
 
     def test_earliest_capacity_is_independent_of_deadline(self):
-        result = analyse(budget(balance=D("1200"), deadline=date(2026, 1, 2),
+        result = analyse(budget(balance=D("1400"), deadline=date(2026, 1, 2),
                                 allows_partial=False, allows_installments=False))
         self.assertGreater(result["earliest"], date(2026, 1, 2))
 

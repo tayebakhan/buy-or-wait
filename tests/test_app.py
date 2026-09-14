@@ -4,7 +4,7 @@ from streamlit.testing.v1 import AppTest
 
 class AppTests(unittest.TestCase):
     def test_render_and_calculate(self):
-        app = AppTest.from_file("app.py", default_timeout=30).run()
+        app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=30).run()
         self.assertEqual(len(app.exception), 0)
         app.button[0].click().run()
         self.assertEqual(len(app.exception), 0)

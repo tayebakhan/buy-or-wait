@@ -31,7 +31,7 @@ Instalments are hypothetical user-entered offers, starting today with equal mont
 
 This repository restores the standalone Streamlit demo from the earlier Buy or Wait hackathon project. The original CSV pipeline, OCR/message extraction, dataset and evaluation scripts are not included in this recovery yet.
 
-This demo uses deterministic calculations. It does not currently call an LLM or connect to a bank. Earlier public-sample accuracy figures belong to the separate dataset engine and do not measure this app.
+The optional Gemini input extracts one purchase into editable fields. The user must review the price, deadline and currency before the deterministic calculator runs. It does not connect to a bank. Earlier public-sample accuracy figures belong to the separate dataset engine and do not measure this app.
 
 Income is assumed to post before debits on the same day. Salary continues monthly, essentials follow the entered budget, and the forecast only covers 90 days. Results are estimates, not guarantees.
 
@@ -50,7 +50,18 @@ In Streamlit Community Cloud, select:
 - Entry point: `app.py`
 - Python: `3.12`
 
-No API key is required.
+Manual entry needs no API key. To enable AI, add these values in the app's Streamlit settings under Secrets:
+
+```toml
+GEMINI_API_KEY = "your-key-from-google-ai-studio"
+GEMINI_MODEL = "gemini-3.8-flash"
+```
+
+Use a model available to your Google project that supports generateContent structured output. Never commit real keys. Only the purchase message, today's date and currency context go to Gemini; sidebar balances and bills are not sent. Provider request limits and charges depend on your account.
+
+The integration uses the [Gemini REST API](https://ai.google.dev/api/generate-content). Missing details remain blank, dates outside the forecast are rejected, and currency mismatches block calculation. No AI response can change the budget or directly select a payment plan.
+
+Tests mock provider responses to check extraction validation, failures and the review flow. They do not measure live model accuracy. A real API key is needed for an end-to-end AI check. Try explicit dates, missing prices, ambiguous deadlines and different currencies after connecting.
 
 ## Origin
 

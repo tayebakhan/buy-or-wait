@@ -1,0 +1,67 @@
+
+import io
+import json
+import unittest
+from datetime import date
+from unittest.mock import patch
+from urllib.error import HTTPError
+from buy_or_wait.purchase_ai import validate_details, extract_purchase, ExtractionError
+
+TODAY = date(2026, 9, 14)
+def details(**changes):
+    data = dict(item="Laptop", amount="900.00", currency="GBP", deadline="2026-09-30")
+    data.update(changes)
+    return data
+
+class PurchaseAITests(unittest.TestCase):
+    def test_valid_details(self):
+        value = validate_details(details(), TODAY)
+        self.assertEqual(value["amount"], 900)
+        self.assertEqual(value["deadline"], date(2026, 9, 30))
+
+    def test_unknowns_stay_unknown(self):
+        self.assertEqual(validate_details(dict.fromkeys(details()), TODAY), dict.fromkeys(details()))
+
+    def test_invalid_money(self):
+        for amount in ("NaN", "Infinity", "-1", "0", "1.001", "1e999", True):
+            with self.subTest(amount=amount), self.assertRaises(ExtractionError):
+                validate_details(details(amount=amount), TODAY)
+
+    def test_dates_currency_and_shape(self):
+        for changes in ({"deadline":"2026-01-01"}, {"deadline":"2028-01-01"}, {"deadline":"soon"}, {"currency":"BDT"}, {"item":42}):
+            with self.subTest(changes=changes), self.assertRaises(ExtractionError):
+                validate_details(details(**changes), TODAY)
+        with self.assertRaises(ExtractionError):
+            validate_details({"safe_to_pay": 999999}, TODAY)
+
+    def test_request_contract(self):
+        response = {"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":json.dumps(details())}]}}]}
+        with patch("buy_or_wait.purchase_ai.urlopen", return_value=io.BytesIO(json.dumps(response).encode())) as mock:
+            result = extract_purchase("Laptop £900 by 30 September", "test-only", TODAY, "GBP")
+        self.assertEqual(result["amount"], 900)
+        req = mock.call_args.args[0]
+        body = json.loads(req.data)
+        self.assertEqual(body["generationConfig"]["responseMimeType"], "application/json")
+        self.assertNotIn("test-only", req.full_url)
+        self.assertEqual(mock.call_args.kwargs["timeout"], 25)
+
+    def test_errors_do_not_expose_provider_details(self):
+        error = HTTPError("https://example.test", 429, "secret-provider-message", {}, None)
+        with patch("buy_or_wait.purchase_ai.urlopen", side_effect=error):
+            with self.assertRaises(ExtractionError) as caught:
+                extract_purchase("Laptop", "test-only", TODAY, "GBP")
+        self.assertNotIn("secret", str(caught.exception))
+        self.assertIn("limit", str(caught.exception))
+
+    def test_invalid_response(self):
+        for raw in ({}, {"candidates":[{"finishReason":"MAX_TOKENS"}]}):
+            with patch("buy_or_wait.purchase_ai.urlopen", return_value=io.BytesIO(json.dumps(raw).encode())):
+                with self.assertRaises(ExtractionError):
+                    extract_purchase("Laptop", "test-only", TODAY, "GBP")
+
+    def test_no_call_without_key_or_text(self):
+        with patch("buy_or_wait.purchase_ai.urlopen") as mock:
+            for text, key in (("", "key"), ("Laptop", ""), ("a"*2001, "key")):
+                with self.assertRaises(ExtractionError):
+                    extract_purchase(text, key, TODAY, "GBP")
+            mock.assert_not_called()

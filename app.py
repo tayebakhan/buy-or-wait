@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import date, timedelta
 from decimal import Decimal
 from html import escape
+import os
 
 import streamlit as st
 
+from buy_or_wait.purchase_ai import extract_purchase, ExtractionError, DEFAULT_MODEL
 from buy_or_wait.money import display
 from buy_or_wait.scenario import Scenario, analyse
 
@@ -39,14 +41,46 @@ with st.sidebar:
     essentials = st.number_input("Other monthly essentials", min_value=0.0, value=350.0, step=25.0)
     pending = st.number_input("Pending payments", min_value=0.0, value=100.0, step=25.0)
 
+
+def setting(name, default=""):
+    try:
+        return st.secrets.get(name, os.environ.get(name, default))
+    except (FileNotFoundError, st.errors.StreamlitSecretNotFoundError):
+        return os.environ.get(name, default)
+
+with st.expander("Tell us what you'd like to buy"):
+    st.write("Describe one purchase and we'll help fill in the details.")
+    st.caption("Your message is sent to Google Gemini when you click Read my request. Your sidebar budget is not sent. Keep account details out of your message.")
+    request_text = st.text_area("Your purchase", placeholder="Can I afford a £900 laptop by 30 September?", max_chars=2000)
+    api_key = setting("GEMINI_API_KEY")
+    if not api_key:
+        st.info("AI isn't connected yet. You can still enter the details below.")
+    if st.button("Read my request", disabled=not bool(api_key)):
+        st.session_state.pop("ai_source", None)
+        st.session_state["ai_confirmed"] = False
+        try:
+            with st.spinner("Reading your request..."):
+                details = extract_purchase(request_text, api_key, date.today(), currency, setting("GEMINI_MODEL", DEFAULT_MODEL))
+            st.session_state["purchase_item"] = details["item"] or ""
+            st.session_state["purchase_amount"] = details["amount"]
+            st.session_state["purchase_deadline"] = details["deadline"]
+            st.session_state["ai_currency"] = details["currency"]
+            st.session_state["ai_source"] = request_text
+            st.session_state["ai_review"] = True
+        except ExtractionError as exc:
+            st.error(str(exc))
+    if st.session_state.get("ai_source") is not None and request_text != st.session_state["ai_source"]:
+        st.info("Your message has changed. Click Read my request again to use the new wording.")
+
+
 st.subheader("What are you thinking of buying?")
 c1, c2, c3 = st.columns([2, 1, 1])
 with c1:
-    item = st.text_input("Expense", value="Laptop")
+    item = st.text_input("Expense", value="Laptop", key="purchase_item", on_change=lambda: st.session_state.update(ai_confirmed=False))
 with c2:
-    amount = st.number_input("Price", min_value=1.0, value=900.0, step=25.0)
+    amount = st.number_input("Price", min_value=1.0, value=900.0, step=25.0, max_value=1000000000.0, key="purchase_amount", on_change=lambda: st.session_state.update(ai_confirmed=False))
 with c3:
-    deadline = st.date_input("Payment deadline", value=date.today() + timedelta(days=75), min_value=date.today(), max_value=date.today() + timedelta(days=90))
+    deadline = st.date_input("Payment deadline", value=date.today() + timedelta(days=75), min_value=date.today(), max_value=date.today() + timedelta(days=90), key="purchase_deadline", on_change=lambda: st.session_state.update(ai_confirmed=False))
 
 o1, o2, o3 = st.columns(3)
 with o1:
@@ -60,7 +94,26 @@ fee = st.number_input("Total instalment fee", min_value=0.0, value=30.0, step=5.
 
 st.caption("Only select split payments if the seller offers them. Instalments here start today and repeat monthly. Enter the total fee from the offer.")
 
-if st.button("Can I afford it?", type="primary", width="stretch"):
+review_ready = True
+if st.session_state.get("ai_review"):
+    st.write("Check the details above before we work out your options.")
+    if not item.strip():
+        st.info("What would you like to buy? Enter it in Expense.")
+    if amount is None:
+        st.info("How much does it cost? Enter the full price.")
+    if deadline is None:
+        st.info("When would you like to finish paying? Choose a payment deadline.")
+    extracted_currency = st.session_state.get("ai_currency")
+    currency_ok = extracted_currency is None or extracted_currency == currency
+    if not currency_ok:
+        st.warning(f"Your request uses {extracted_currency}, but your budget uses {currency}. Update the sidebar currency and budget to match. We don't convert currencies.")
+    review_ready = st.checkbox(f"I've checked the purchase, price and date. All amounts are in {currency}.", key="ai_confirmed") and currency_ok
+    if st.button("Use the manual form"):
+        st.session_state["ai_review"] = False
+        st.session_state.pop("ai_source", None)
+        st.rerun()
+if st.button("Can I afford it?", type="primary", width="stretch",
+             disabled=not (review_ready and item.strip() and amount is not None and deadline is not None)):
     scenario = Scenario(
         today=date.today(), balance=Decimal(str(balance)), minimum_balance=Decimal(str(floor)),
         purchase_amount=Decimal(str(amount)), deadline=deadline, next_salary_date=payday,

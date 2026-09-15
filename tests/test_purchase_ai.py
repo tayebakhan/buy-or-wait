@@ -65,3 +65,13 @@ class PurchaseAITests(unittest.TestCase):
                 with self.assertRaises(ExtractionError):
                     extract_purchase(text, key, TODAY, "GBP")
             mock.assert_not_called()
+
+    def test_http_diagnostics_without_secret_details(self):
+        for code in (401, 500, 502, 503, 504, 418):
+            with self.subTest(code=code):
+                error = HTTPError("https://example.test", code, "private-key-value", {}, None)
+                with patch("buy_or_wait.purchase_ai.urlopen", side_effect=error):
+                    with self.assertRaises(ExtractionError) as caught:
+                        extract_purchase("Dyson USD 600", "test-only", TODAY, "GBP")
+                self.assertIn(f"HTTP {code}", str(caught.exception))
+                self.assertNotIn("private-key-value", str(caught.exception))

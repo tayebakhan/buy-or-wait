@@ -133,7 +133,7 @@ def _local_purchase_reader(text, today):
         item_text,
         flags=re.IGNORECASE,
     )
-    item_text = re.sub(r"\b(?:by|before|on)\s*$", "", item_text, flags=re.IGNORECASE)
+    item_text = re.sub(r"\b(?:by|before|on)\s*[?.!,]*\s*$", "", item_text, flags=re.IGNORECASE)
     item_text = re.sub(r"\s+", " ", item_text).strip(" .,?!")
     item_text = re.sub(r"^(?:a|an|the)\s+", "", item_text, flags=re.IGNORECASE)
     item = item_text[:80].strip().title() or None

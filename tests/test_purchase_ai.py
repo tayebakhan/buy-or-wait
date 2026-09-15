@@ -75,3 +75,21 @@ class PurchaseAITests(unittest.TestCase):
                         extract_purchase("Dyson USD 600", "test-only", TODAY, "GBP")
                 self.assertIn(f"HTTP {code}", str(caught.exception))
                 self.assertNotIn("private-key-value", str(caught.exception))
+
+    def test_retries_then_uses_fallback_model(self):
+        unavailable = HTTPError("https://example.test", 503, "busy", {}, None)
+        response = {
+            "candidates": [{
+                "finishReason": "STOP",
+                "content": {"parts": [{"text": json.dumps(details())}]},
+            }]
+        }
+        with patch(
+            "buy_or_wait.purchase_ai.urlopen",
+            side_effect=[unavailable, unavailable, io.BytesIO(json.dumps(response).encode())],
+        ) as mock, patch("buy_or_wait.purchase_ai.time.sleep") as sleep:
+            result = extract_purchase("A GBP 900 laptop", "test-only", TODAY, "GBP")
+        self.assertEqual(result["item"], "Laptop")
+        self.assertEqual(mock.call_count, 3)
+        self.assertEqual(sleep.call_count, 1)
+        self.assertIn("gemini-2.5-flash", mock.call_args.args[0].full_url)

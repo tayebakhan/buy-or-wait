@@ -87,12 +87,17 @@ def extract_purchase(text, api_key, today, currency, model=DEFAULT_MODEL):
         return validate_details(json.loads(output), today)
     except HTTPError as exc:
         message = {
+            401: "Google could not authenticate the AI key. Check GEMINI_API_KEY in Streamlit Secrets.",
+            500: "Google had an internal error. Please try again in a moment.",
+            502: "The AI service returned a gateway error. Please try again in a moment.",
+            503: "Google AI is temporarily unavailable or busy. Please try again shortly.",
+            504: "Google AI took too long to respond. Please try again shortly.",
             400: "The AI connection needs checking. You can use the manual form.",
             403: "The AI key doesn't have access. You can use the manual form.",
             404: "The selected AI model isn't available. Please check the model setting.",
             429: "AI has reached its request limit. Please try later or use the manual form.",
         }.get(exc.code, "AI is unavailable right now. Please use the manual form.")
-        raise ExtractionError(message) from None
+        raise ExtractionError(f"{message} (HTTP {exc.code})") from None
     except (URLError, TimeoutError, OSError):
         raise ExtractionError("AI couldn't connect. Please try again or use the manual form.") from None
     except (KeyError, IndexError, TypeError, json.JSONDecodeError):

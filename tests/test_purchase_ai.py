@@ -67,7 +67,7 @@ class PurchaseAITests(unittest.TestCase):
             mock.assert_not_called()
 
     def test_http_diagnostics_without_secret_details(self):
-        for code in (401, 500, 502, 503, 504, 418):
+        for code in (401, 418):
             with self.subTest(code=code):
                 error = HTTPError("https://example.test", code, "private-key-value", {}, None)
                 with patch("buy_or_wait.purchase_ai.urlopen", side_effect=error):
@@ -75,6 +75,23 @@ class PurchaseAITests(unittest.TestCase):
                         extract_purchase("Dyson USD 600", "test-only", TODAY, "GBP")
                 self.assertIn(f"HTTP {code}", str(caught.exception))
                 self.assertNotIn("private-key-value", str(caught.exception))
+
+    def test_server_outage_uses_local_reader(self):
+        unavailable = HTTPError("https://example.test", 503, "busy", {}, None)
+        with patch("buy_or_wait.purchase_ai.urlopen", side_effect=unavailable), patch(
+            "buy_or_wait.purchase_ai.time.sleep"
+        ):
+            result = extract_purchase(
+                "Can I buy a $600 Dyson before Sep 20?",
+                "test-only",
+                TODAY,
+                "GBP",
+            )
+        self.assertEqual(result["item"], "Dyson")
+        self.assertEqual(result["amount"], 600)
+        self.assertEqual(result["currency"], "USD")
+        self.assertEqual(result["deadline"], date(2026, 9, 20))
+        self.assertTrue(result["_used_local_fallback"])
 
     def test_retries_then_uses_fallback_model(self):
         unavailable = HTTPError("https://example.test", 503, "busy", {}, None)

@@ -52,6 +52,103 @@ def validate_details(data, today):
         result["deadline"] = day
     return result
 
+
+MONTHS = {
+    name: number
+    for number, names in enumerate(
+        ((), ("jan", "january"), ("feb", "february"), ("mar", "march"),
+         ("apr", "april"), ("may",), ("jun", "june"), ("jul", "july"),
+         ("aug", "august"), ("sep", "sept", "september"), ("oct", "october"),
+         ("nov", "november"), ("dec", "december"))
+    )
+    for name in names
+}
+SYMBOL_CURRENCIES = {"£": "GBP", "$": "USD", "€": "EUR", "₹": "INR"}
+
+
+def _local_purchase_reader(text, today):
+    """Small outage fallback for simple purchase sentences, not an AI model."""
+    working = clean_text(text).strip()
+    deadline = None
+    date_span = None
+
+    iso = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", working)
+    relative = re.search(r"\bin\s+(\d{1,2})\s+days?\b", working, re.IGNORECASE)
+    named = re.search(
+        r"\b(?:(\d{1,2})\s+([A-Za-z]+)|([A-Za-z]+)\s+(\d{1,2}))"
+        r"(?:\s*,?\s*(20\d{2}))?\b",
+        working,
+    )
+    try:
+        if iso:
+            deadline = date.fromisoformat(iso.group(1))
+            date_span = iso.span()
+        elif relative:
+            deadline = today + timedelta(days=int(relative.group(1)))
+            date_span = relative.span()
+        elif named:
+            day = int(named.group(1) or named.group(4))
+            month = MONTHS.get((named.group(2) or named.group(3)).lower())
+            if month:
+                year = int(named.group(5) or today.year)
+                deadline = date(year, month, day)
+                if not named.group(5) and deadline < today:
+                    deadline = date(year + 1, month, day)
+                date_span = named.span()
+    except ValueError:
+        deadline = None
+    if deadline is not None and not today <= deadline <= today + timedelta(days=90):
+        deadline = None
+
+    money = re.search(
+        r"(?:(£|\$|€|₹|GBP|USD|EUR|INR|ZAR|IDR)\s*)?"
+        r"(\d[\d,]*(?:\.\d{1,2})?)"
+        r"(?:\s*(£|\$|€|₹|GBP|USD|EUR|INR|ZAR|IDR))?",
+        working,
+        re.IGNORECASE,
+    )
+    amount = None
+    currency = None
+    money_span = None
+    if money:
+        raw_amount = money.group(2).replace(",", "")
+        number = Decimal(raw_amount)
+        looks_like_year = number == number.to_integral() and 2000 <= number <= 2100
+        if not looks_like_year or money.group(1) or money.group(3):
+            amount = float(number)
+            token = money.group(1) or money.group(3)
+            if token:
+                token = token.upper()
+                currency = SYMBOL_CURRENCIES.get(token, token)
+            money_span = money.span()
+
+    item_text = working
+    for span in sorted((s for s in (date_span, money_span) if s), reverse=True):
+        item_text = item_text[:span[0]] + " " + item_text[span[1]:]
+    item_text = re.sub(
+        r"^\s*(?:can\s+i|could\s+i|should\s+i|i)\s+"
+        r"(?:(?:want|wanna|need|would\s+like)\s+(?:to\s+)?)?"
+        r"(?:buy|but|get|afford)?\s*",
+        "",
+        item_text,
+        flags=re.IGNORECASE,
+    )
+    item_text = re.sub(r"\b(?:by|before|on)\s*$", "", item_text, flags=re.IGNORECASE)
+    item_text = re.sub(r"\s+", " ", item_text).strip(" .,?!")
+    item_text = re.sub(r"^(?:a|an|the)\s+", "", item_text, flags=re.IGNORECASE)
+    item = item_text[:80].strip().title() or None
+
+    data = {
+        "item": item,
+        "amount": f"{amount:.2f}" if amount is not None else None,
+        "currency": currency,
+        "deadline": deadline.isoformat() if deadline else None,
+    }
+    result = validate_details(data, today)
+    result["_used_local_fallback"] = True
+    return result
+
+
 def _request_model(text, api_key, today, currency, model):
     instruction = (
         "Extract one requested purchase into the schema. Never decide affordability or change a budget. "
@@ -125,6 +222,9 @@ def extract_purchase(text, api_key, today, currency, model=DEFAULT_MODEL):
         raise ExtractionError("AI couldn't connect. Please try again or use the manual form.") from None
     except (KeyError, IndexError, TypeError, json.JSONDecodeError):
         raise ExtractionError("AI returned an incomplete answer. Please try again or use the manual form.") from None
+
+    if last_code is not None and 500 <= last_code < 600:
+        return _local_purchase_reader(text, today)
 
     message = {
         400: "The AI connection needs checking. You can use the manual form.",

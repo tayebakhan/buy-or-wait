@@ -61,12 +61,15 @@ with st.expander("Tell us what you'd like to buy"):
         try:
             with st.spinner("Reading your request..."):
                 details = extract_purchase(request_text, api_key, date.today(), currency, setting("GEMINI_MODEL", DEFAULT_MODEL))
+            used_local_fallback = details.pop("_used_local_fallback", False)
             st.session_state["purchase_item"] = details["item"] or ""
             st.session_state["purchase_amount"] = details["amount"]
             st.session_state["purchase_deadline"] = details["deadline"]
             st.session_state["ai_currency"] = details["currency"]
             st.session_state["ai_source"] = request_text
             st.session_state["ai_review"] = True
+            if used_local_fallback:
+                st.warning("Google AI is busy, so the backup reader filled in what it could. Check every detail before continuing.")
         except ExtractionError as exc:
             st.error(str(exc))
     if st.session_state.get("ai_source") is not None and request_text != st.session_state["ai_source"]:

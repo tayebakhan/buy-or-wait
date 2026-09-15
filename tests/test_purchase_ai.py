@@ -109,4 +109,27 @@ class PurchaseAITests(unittest.TestCase):
         self.assertEqual(result["item"], "Laptop")
         self.assertEqual(mock.call_count, 3)
         self.assertEqual(sleep.call_count, 1)
+        self.assertIn("gemini-2.5-flash-lite", mock.call_args.args[0].full_url)
+
+    def test_missing_configured_model_uses_supported_fallback(self):
+        missing = HTTPError("https://example.test", 404, "not found", {}, None)
+        response = {
+            "candidates": [{
+                "finishReason": "STOP",
+                "content": {"parts": [{"text": json.dumps(details())}]},
+            }]
+        }
+        with patch(
+            "buy_or_wait.purchase_ai.urlopen",
+            side_effect=[missing, io.BytesIO(json.dumps(response).encode())],
+        ) as mock:
+            result = extract_purchase(
+                "A GBP 900 laptop",
+                "test-only",
+                TODAY,
+                "GBP",
+                model="unavailable-model",
+            )
+        self.assertEqual(result["amount"], 900)
+        self.assertEqual(mock.call_count, 2)
         self.assertIn("gemini-2.5-flash", mock.call_args.args[0].full_url)

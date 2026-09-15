@@ -8,8 +8,8 @@ from decimal import Decimal, InvalidOperation
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-DEFAULT_MODEL = "gemini-3.8-flash"
-FALLBACK_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-2.5-flash"
+FALLBACK_MODELS = ("gemini-2.5-flash", "gemini-2.5-flash-lite")
 CURRENCIES = ("GBP", "USD", "EUR", "INR", "ZAR", "IDR")
 SCHEMA = {
     "type": "OBJECT",
@@ -197,9 +197,7 @@ def extract_purchase(text, api_key, today, currency, model=DEFAULT_MODEL):
     if not re.fullmatch(r"[a-zA-Z0-9._-]+", model):
         raise ExtractionError("The AI model setting needs updating.")
 
-    models = [model]
-    if model != FALLBACK_MODEL:
-        models.append(FALLBACK_MODEL)
+    models = list(dict.fromkeys((model, *FALLBACK_MODELS)))
 
     last_code = None
     try:
@@ -214,8 +212,8 @@ def extract_purchase(text, api_key, today, currency, model=DEFAULT_MODEL):
                         time.sleep(1 + random.uniform(0, 0.5))
                         continue
                     break
-            can_fallback = last_code is not None and 500 <= last_code < 600
-            if model_number == 0 and len(models) > 1 and can_fallback:
+            can_fallback = last_code == 404 or (last_code is not None and 500 <= last_code < 600)
+            if model_number < len(models) - 1 and can_fallback:
                 continue
             break
     except (URLError, TimeoutError, OSError):
@@ -223,7 +221,7 @@ def extract_purchase(text, api_key, today, currency, model=DEFAULT_MODEL):
     except (KeyError, IndexError, TypeError, json.JSONDecodeError):
         raise ExtractionError("AI returned an incomplete answer. Please try again or use the manual form.") from None
 
-    if last_code is not None and 500 <= last_code < 600:
+    if last_code == 404 or (last_code is not None and 500 <= last_code < 600):
         return _local_purchase_reader(text, today)
 
     message = {

@@ -54,7 +54,7 @@ Manual entry needs no API key. To enable AI, add these values in the app's Strea
 
 ```toml
 GEMINI_API_KEY = "your-key-from-google-ai-studio"
-GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_MODEL = "gemini-2.5-flash"
 ```
 
 Use a model available to your Google project that supports generateContent structured output. Never commit real keys. Only the purchase message, today's date and currency context go to Gemini; sidebar balances and bills are not sent. Provider request limits and charges depend on your account.

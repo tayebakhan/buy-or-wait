@@ -49,31 +49,64 @@ def setting(name, default=""):
         return os.environ.get(name, default)
 
 with st.expander("Tell us what you'd like to buy"):
-    st.write("Describe one purchase and we'll help fill in the details.")
-    st.caption("Your message is sent to Google Gemini when you click Read my request. Your sidebar budget is not sent. Keep account details out of your message.")
-    request_text = st.text_area("Your purchase", placeholder="Can I afford a £900 laptop by 30 September?", max_chars=2000)
+    st.write("Type what you want to buy, or upload a screenshot or photo.")
+    st.caption("When you click Read my request, your message and uploaded image are sent to Google Gemini. Your sidebar budget is not sent. Keep bank details and account numbers out of uploads.")
+    request_text = st.text_area(
+        "Your purchase",
+        placeholder="Can I afford a £900 laptop by 30 September?",
+        max_chars=2000,
+    )
+    uploaded_image = st.file_uploader(
+        "Screenshot or photo (optional)",
+        type=["jpg", "jpeg", "png", "webp"],
+        help="Use a product listing, bill, receipt or payment message. Maximum size: 5 MB.",
+    )
+    if uploaded_image is not None:
+        st.image(uploaded_image, caption=uploaded_image.name, width=280)
+
     api_key = setting("GEMINI_API_KEY")
+    has_request = bool(request_text.strip() or uploaded_image is not None)
     if not api_key:
         st.info("AI isn't connected yet. You can still enter the details below.")
-    if st.button("Read my request", disabled=not bool(api_key)):
+    if st.button("Read my request", disabled=not bool(api_key) or not has_request):
         st.session_state.pop("ai_source", None)
         st.session_state["ai_confirmed"] = False
         try:
+            image_data = uploaded_image.getvalue() if uploaded_image is not None else None
+            image_mime = uploaded_image.type if uploaded_image is not None else None
             with st.spinner("Reading your request..."):
-                details = extract_purchase(request_text, api_key, date.today(), currency, setting("GEMINI_MODEL", DEFAULT_MODEL))
+                details = extract_purchase(
+                    request_text,
+                    api_key,
+                    date.today(),
+                    currency,
+                    setting("GEMINI_MODEL", DEFAULT_MODEL),
+                    image_data=image_data,
+                    image_mime=image_mime,
+                )
             used_local_fallback = details.pop("_used_local_fallback", False)
             st.session_state["purchase_item"] = details["item"] or ""
             st.session_state["purchase_amount"] = details["amount"]
             st.session_state["purchase_deadline"] = details["deadline"]
             st.session_state["ai_currency"] = details["currency"]
-            st.session_state["ai_source"] = request_text
+            st.session_state["ai_source"] = (
+                request_text,
+                uploaded_image.name if uploaded_image is not None else None,
+                len(image_data) if image_data is not None else 0,
+            )
             st.session_state["ai_review"] = True
             if used_local_fallback:
-                st.warning("Google AI is busy, so the backup reader filled in what it could. Check every detail before continuing.")
+                st.warning("Google AI is busy, so the backup reader used your written message. Check every detail before continuing.")
         except ExtractionError as exc:
             st.error(str(exc))
-    if st.session_state.get("ai_source") is not None and request_text != st.session_state["ai_source"]:
-        st.info("Your message has changed. Click Read my request again to use the new wording.")
+
+    source_signature = (
+        request_text,
+        uploaded_image.name if uploaded_image is not None else None,
+        uploaded_image.size if uploaded_image is not None else 0,
+    )
+    if st.session_state.get("ai_source") is not None and source_signature != st.session_state["ai_source"]:
+        st.info("Your request has changed. Click Read my request again to use the new details.")
 
 
 st.subheader("What are you thinking of buying?")

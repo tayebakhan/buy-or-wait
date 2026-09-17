@@ -133,3 +133,56 @@ class PurchaseAITests(unittest.TestCase):
         self.assertEqual(result["amount"], 900)
         self.assertEqual(mock.call_count, 2)
         self.assertIn("gemini-2.5-flash", mock.call_args.args[0].full_url)
+
+    def test_image_is_sent_as_inline_data(self):
+        response = {
+            "candidates": [{
+                "finishReason": "STOP",
+                "content": {"parts": [{"text": json.dumps(details())}]},
+            }]
+        }
+        with patch(
+            "buy_or_wait.purchase_ai.urlopen",
+            return_value=io.BytesIO(json.dumps(response).encode()),
+        ) as mock:
+            result = extract_purchase(
+                "",
+                "test-only",
+                TODAY,
+                "GBP",
+                image_data=b"fake-image-bytes",
+                image_mime="image/png",
+            )
+        self.assertEqual(result["amount"], 900)
+        body = json.loads(mock.call_args.args[0].data)
+        parts = body["contents"][0]["parts"]
+        self.assertEqual(parts[1]["inline_data"]["mime_type"], "image/png")
+        self.assertEqual(parts[1]["inline_data"]["data"], "ZmFrZS1pbWFnZS1ieXRlcw==")
+
+    def test_image_validation(self):
+        cases = (
+            {"image_data": b"", "image_mime": "image/png"},
+            {"image_data": b"image", "image_mime": "application/pdf"},
+            {"image_data": b"x" * (5 * 1024 * 1024 + 1), "image_mime": "image/jpeg"},
+        )
+        with patch("buy_or_wait.purchase_ai.urlopen") as mock:
+            for kwargs in cases:
+                with self.subTest(kwargs=kwargs), self.assertRaises(ExtractionError):
+                    extract_purchase("", "test-only", TODAY, "GBP", **kwargs)
+            mock.assert_not_called()
+
+    def test_image_only_outage_does_not_invent_details(self):
+        unavailable = HTTPError("https://example.test", 503, "busy", {}, None)
+        with patch("buy_or_wait.purchase_ai.urlopen", side_effect=unavailable), patch(
+            "buy_or_wait.purchase_ai.time.sleep"
+        ):
+            with self.assertRaises(ExtractionError) as caught:
+                extract_purchase(
+                    "",
+                    "test-only",
+                    TODAY,
+                    "GBP",
+                    image_data=b"image",
+                    image_mime="image/webp",
+                )
+        self.assertIn("503", str(caught.exception))

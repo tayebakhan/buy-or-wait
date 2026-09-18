@@ -46,3 +46,4 @@ jobs:
             evaluation/public_sample_report.json
             challenge/dataset/*.csv
             challenge/dataset/evidence_cache.json
+            challenge/dataset/media/images/*.png

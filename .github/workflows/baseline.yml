@@ -1,0 +1,47 @@
+name: Public sample baseline
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/baseline.yml"
+      - "buy_or_wait/batch.py"
+      - "evaluation/**"
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install OCR
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+      - name: Download public challenge corpus
+        run: git clone --depth 1 https://github.com/interviewstreet/hackerrank-orchestrate-september26.git challenge
+      - name: Prepare solved sample dataset
+        run: |
+          cp challenge/dataset/sample_requests.csv challenge/dataset/requests.csv
+          python evaluation/build_evidence_cache.py --dataset challenge/dataset
+      - name: Generate sample predictions
+        run: python code/main.py --dataset challenge/dataset --output sample_output.csv
+      - name: Score sample predictions
+        run: |
+          python evaluation/evaluate.py \
+            --predictions sample_output.csv \
+            --expected challenge/dataset/sample_requests.csv \
+            --report evaluation/public_sample_report.md \
+            --json evaluation/public_sample_report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: public-sample-baseline
+          path: |
+            sample_output.csv
+            evaluation/public_sample_report.md
+            evaluation/public_sample_report.json
+            challenge/dataset/evidence_cache.json

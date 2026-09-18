@@ -53,7 +53,13 @@ def extract_amount(text: str) -> Decimal:
     ]
     if not parsed:
         numeric = re.findall(NUMBER, text)
-        parsed = [amount for raw in numeric if (amount := normalize_number(raw)) is not None and amount >= 10]
+        parsed = [
+            amount for raw in numeric
+            if (amount := normalize_number(raw)) is not None
+            and amount >= 10
+            and amount < Decimal("1000000000000")
+            and not (1900 <= amount <= 2100 and amount == amount.to_integral())
+        ]
     if not parsed:
         raise ValueError("No positive amount found in OCR text")
     return max(parsed)

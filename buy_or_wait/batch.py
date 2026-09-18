@@ -469,6 +469,8 @@ class DecisionEngine:
                     candidates.append(Candidate("affordable_with_plan", "partial_payment", plan, changes, amount))
             if "installments" in methods:
                 for option in options:
+                    if option.get("payment_method", "").lower() != "installments":
+                        continue
                     schedule = self._option_schedule(option)
                     if not schedule or schedule[-1][0] > add_months(request_date, max_months) or schedule[-1][0] > deadline:
                         continue

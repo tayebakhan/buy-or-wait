@@ -44,4 +44,5 @@ jobs:
             sample_output.csv
             evaluation/public_sample_report.md
             evaluation/public_sample_report.json
+            challenge/dataset/*.csv
             challenge/dataset/evidence_cache.json

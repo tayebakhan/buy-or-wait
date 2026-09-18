@@ -1,10 +1,27 @@
 # Buy or Wait?
 
-A small budgeting app for the moment you find something you want and wonder whether it can wait until payday.
+An AI-assisted financial planning project that answers a simple question: can someone safely afford a purchase now, with a plan, later, or not within the next 90 days?
 
-Enter your balance, bills, salary and purchase price. The app compares paying today, splitting the cost and waiting, then shows a 90-day balance chart.
+Try the live app: [buy-or-wait-xf8arqodck2gxvkesbckb5.streamlit.app](https://buy-or-wait-xf8arqodck2gxvkesbckb5.streamlit.app/)
 
-## Run locally
+The project now has two connected parts:
+
+- A friendly Streamlit calculator for one purchase
+- A batch agent that reads the original challenge CSV files and produces the exact `output.csv` schema
+
+## How the agent works
+
+1. It joins each request to the user's financial profile, events, payment options, messages and images.
+2. It converts foreign-currency events using the supplied dated exchange rates.
+3. It ignores unsafe evidence such as pending income, failed payments and unrealized investment values.
+4. It learns weekly, fortnightly and monthly patterns from settled history, then builds a 90-day cash forecast.
+5. It tests full payment, exactly two partial payments, supplied installment offers, waiting and up to three permitted spending changes.
+6. It rejects any plan that misses the requested date or lets the balance fall below the user's chosen minimum.
+7. It writes and validates the eight required output columns.
+
+Money calculations use `Decimal`, not floating-point arithmetic. AI can read a missing amount from a linked image, but AI never makes the affordability decision.
+
+## Run the Streamlit app locally
 
 Requires Python 3.12.
 
@@ -15,34 +32,60 @@ python3 -m pip install -r requirements.txt
 python3 -m streamlit run app.py
 ```
 
+## Run the challenge dataset
+
+Download the original challenge data and place its CSV files and `media/` folder inside a local `dataset/` directory. The dataset is intentionally not committed to this portfolio repository.
+
+```bash
+python3 code/main.py --dataset dataset --output output.csv
+```
+
+The command stops with a clear error if a required file or column is missing. On success it checks the output column order, request IDs, labels, dates, payment-plan format and spending-change format.
+
+If an event amount is only available in an image, set `GEMINI_API_KEY`. To make repeated runs cheaper and reproducible, you may instead create `dataset/evidence_cache.json`:
+
+```json
+{
+  "image_01": {"amount": "1250.00"}
+}
+```
+
+Only cache a value after checking the linked image yourself.
+
+## Evaluate against the solved samples
+
+First generate predictions for the sample request rows, then compare them with the completed columns in `sample_requests.csv`:
+
+```bash
+python3 evaluation/evaluate.py \
+  --predictions sample_output.csv \
+  --expected dataset/sample_requests.csv
+```
+
+This creates `evaluation/report.md` and `evaluation/report.json` with exact-row and per-field accuracy. Free-text explanations are reported but excluded from exact matching.
+
+Before presenting a final full-dataset run, complete `evaluation/usage_report.md` with the actual provider calls, tokens and cost. The deterministic forecasting engine itself makes zero model calls.
+
 ## What is included
 
 - Natural-language and image extraction for product listings, bills, receipts and payment messages
-- Manual budget entry and a minimum balance to keep aside
-- Explicit next salary and rent dates
-- Monthly income and rent schedules with calendar month-end handling
-- Essential spending spread across each calendar month
-- Full, partial, monthly instalment and delayed payment comparisons
-- A payment schedule, earliest full-payment date and balance chart
-- Decimal arithmetic for monetary calculations
+- Exact challenge CSV ingestion and output validation
+- Dated currency conversion
+- Conflict handling for linked, cancelled, failed, settled and pending records
+- Common explicit message amendments for amounts, salary dates and event status
+- Recurring cashflow inference from settled history
+- Full, partial, installment, delayed and flexible-spending comparisons
+- A payment schedule, earliest full-payment date and 90-day balance forecast
+- A public-sample evaluation workflow
+- Automated tests and GitHub Actions checks
 
-Instalments are hypothetical user-entered offers, starting today with equal monthly payments plus any rounding adjustment in the last payment. Only select them if the seller offers those terms. Pending payments must not already be deducted from the starting balance.
+## Current limitations
 
-## Current scope
+This is a strong reproducible baseline, not a claim of perfect hidden-test accuracy. Message wording outside the supported explicit patterns may need a richer multilingual evidence normalizer. Image extraction also needs either a Gemini key or a reviewed cache entry. The next improvement should measure this baseline on all 25 solved sample requests, inspect each mismatch, and improve recurrence and evidence rules without hardcoding answers.
 
-This repository restores the standalone Streamlit demo from the earlier Buy or Wait hackathon project. The original CSV pipeline, dataset and evaluation scripts are not included in this recovery yet.
+The app and batch engine do not connect to a bank. Results are estimates based only on the supplied information and are not financial advice.
 
-The optional Gemini input extracts one purchase into editable fields. The user must review the price, deadline and currency before the deterministic calculator runs. It does not connect to a bank. Earlier public-sample accuracy figures belong to the separate dataset engine and do not measure this app.
-
-Income is assumed to post before debits on the same day. Salary continues monthly, essentials follow the entered budget, and the forecast only covers 90 days. Results are estimates, not guarantees.
-
-## Checks
-
-```bash
-python3 -m unittest discover -s tests -v
-```
-
-## Deploy
+## Streamlit deployment
 
 In Streamlit Community Cloud, select:
 
@@ -58,11 +101,13 @@ GEMINI_API_KEY = "your-key-from-google-ai-studio"
 GEMINI_MODEL = "gemini-2.5-flash"
 ```
 
-Use a model available to your Google project that supports generateContent structured output. Never commit real keys. Only the purchase message, optional uploaded image, today's date and currency context go to Gemini; sidebar balances and bills are not sent. JPG, PNG and WebP uploads are limited to 5 MB and are processed in memory. Provider request limits and charges depend on your account.
+Never commit real keys. In the Streamlit app, only the purchase message, optional uploaded image, current date and currency context go to Gemini. Sidebar balances and bills are not sent. JPG, PNG and WebP uploads are limited to 5 MB and processed in memory.
 
-The integration uses the [Gemini REST API](https://ai.google.dev/api/generate-content). Missing details remain blank, dates outside the forecast are rejected, and currency mismatches block calculation. No AI response can change the budget or directly select a payment plan.
+## Checks
 
-Tests mock provider responses to check extraction validation, failures and the review flow. They do not measure live model accuracy. A real API key is needed for an end-to-end AI check. Try explicit dates, missing prices, ambiguous deadlines and different currencies after connecting.
+```bash
+python3 -m unittest discover -s tests -v
+```
 
 ## Origin
 

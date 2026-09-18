@@ -1,0 +1,102 @@
+"""Evaluate a predictions CSV against the public solved sample requests."""
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from buy_or_wait.batch import OUTPUT_COLUMNS, DatasetError, validate_output
+
+
+def read_csv(path: Path) -> list[dict[str, str]]:
+    with path.open(newline="", encoding="utf-8-sig") as handle:
+        return list(csv.DictReader(handle))
+
+
+def evaluate(predictions: Path, expected: Path) -> dict[str, object]:
+    predicted_rows = validate_output(predictions)
+    expected_rows = read_csv(expected)
+    predicted = {row["request_id"]: row for row in predicted_rows}
+    expected_by_id = {row["request_id"]: row for row in expected_rows}
+    missing = sorted(set(expected_by_id) - set(predicted))
+    extra = sorted(set(predicted) - set(expected_by_id))
+    fields = [column for column in OUTPUT_COLUMNS if column not in {"request_id", "decision_explanation"}]
+    per_field = {}
+    for field in fields:
+        matches = sum(
+            predicted[request_id].get(field, "").strip() == expected_by_id[request_id].get(field, "").strip()
+            for request_id in set(predicted) & set(expected_by_id)
+        )
+        per_field[field] = {
+            "matches": matches,
+            "total": len(expected_by_id),
+            "accuracy": round(matches / len(expected_by_id), 4) if expected_by_id else 0,
+        }
+    exact_rows = sum(
+        all(predicted[request_id].get(field, "").strip() == expected_by_id[request_id].get(field, "").strip() for field in fields)
+        for request_id in set(predicted) & set(expected_by_id)
+    )
+    return {
+        "expected_rows": len(expected_by_id),
+        "predicted_rows": len(predicted),
+        "missing_request_ids": missing,
+        "extra_request_ids": extra,
+        "exact_rows": exact_rows,
+        "exact_row_accuracy": round(exact_rows / len(expected_by_id), 4) if expected_by_id else 0,
+        "per_field": per_field,
+        "note": "decision_explanation is excluded from exact matching because it is free text",
+    }
+
+
+def to_markdown(result: dict[str, object]) -> str:
+    lines = [
+        "# Evaluation report",
+        "",
+        f"Exact rows: {result['exact_rows']} / {result['expected_rows']} ({result['exact_row_accuracy']:.1%})",
+        "",
+        "| Field | Matches | Accuracy |",
+        "| --- | ---: | ---: |",
+    ]
+    for field, values in result["per_field"].items():
+        lines.append(f"| `{field}` | {values['matches']} / {values['total']} | {values['accuracy']:.1%} |")
+    lines.extend([
+        "",
+        f"Missing request IDs: {', '.join(result['missing_request_ids']) or 'none'}",
+        "",
+        f"Extra request IDs: {', '.join(result['extra_request_ids']) or 'none'}",
+        "",
+        str(result["note"]),
+        "",
+    ])
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Compare Buy or Wait predictions with solved sample rows.")
+    parser.add_argument("--predictions", default="output.csv")
+    parser.add_argument("--expected", default="dataset/sample_requests.csv")
+    parser.add_argument("--report", default="evaluation/report.md")
+    parser.add_argument("--json", dest="json_path", default="evaluation/report.json")
+    args = parser.parse_args(argv)
+    try:
+        result = evaluate(Path(args.predictions), Path(args.expected))
+    except (OSError, DatasetError) as exc:
+        parser.error(str(exc))
+    report_path = Path(args.report)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(to_markdown(result), encoding="utf-8")
+    json_path = Path(args.json_path)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    print(to_markdown(result))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

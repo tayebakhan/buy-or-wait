@@ -4,3 +4,8 @@ __pycache__/
 .env
 .streamlit/secrets.toml
 log.txt
+dataset/
+output.csv
+sample_output.csv
+evaluation/report.md
+evaluation/report.json

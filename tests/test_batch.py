@@ -1,0 +1,80 @@
+import csv
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from buy_or_wait.batch import Dataset, DecisionEngine, OUTPUT_COLUMNS, run, validate_output
+
+
+def write_csv(root, name, fieldnames, rows):
+    with (root / name).open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+class BatchEngineTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        profile_fields = [
+            "user_id", "home_currency", "current_available_balance", "minimum_balance_to_keep",
+            "financial_priorities", "expense_categories_to_protect",
+            "expense_categories_user_is_willing_to_reduce", "expense_categories_user_is_willing_to_stop",
+            "payment_methods_user_will_consider", "max_installment_months",
+        ]
+        write_csv(self.root, "financial_profiles.csv", profile_fields, [
+            {"user_id": "full", "home_currency": "GBP", "current_available_balance": "1000", "minimum_balance_to_keep": "200", "payment_methods_user_will_consider": "full_payment", "max_installment_months": "6"},
+            {"user_id": "wait", "home_currency": "GBP", "current_available_balance": "500", "minimum_balance_to_keep": "200", "payment_methods_user_will_consider": "full_payment", "max_installment_months": "6"},
+            {"user_id": "split", "home_currency": "GBP", "current_available_balance": "500", "minimum_balance_to_keep": "200", "payment_methods_user_will_consider": "installments", "max_installment_months": "6"},
+        ])
+        request_fields = ["request_id", "user_id", "request_date", "request_type", "requested_amount", "desired_completion_date", "allows_partial_payment", "request_text"]
+        write_csv(self.root, "requests.csv", request_fields, [
+            {"request_id": "r_full", "user_id": "full", "request_date": "2026-09-01", "request_type": "purchase", "requested_amount": "300", "desired_completion_date": "2026-09-20", "allows_partial_payment": "false", "request_text": "Laptop"},
+            {"request_id": "r_wait", "user_id": "wait", "request_date": "2026-09-01", "request_type": "purchase", "requested_amount": "400", "desired_completion_date": "2026-09-20", "allows_partial_payment": "false", "request_text": "Bike"},
+            {"request_id": "r_split", "user_id": "split", "request_date": "2026-09-01", "request_type": "purchase", "requested_amount": "400", "desired_completion_date": "2026-09-20", "allows_partial_payment": "false", "request_text": "Desk"},
+        ])
+        event_fields = ["event_id", "user_id", "event_type", "description", "category", "direction", "amount", "currency", "event_date", "settlement_date", "status", "linked_event_id", "flexibility", "minimum_allowed_amount"]
+        write_csv(self.root, "financial_events.csv", event_fields, [
+            {"event_id": "salary_wait", "user_id": "wait", "event_type": "salary", "description": "Confirmed salary", "category": "income", "direction": "credit", "amount": "500", "currency": "GBP", "event_date": "2026-09-10", "settlement_date": "2026-09-10", "status": "scheduled"},
+            {"event_id": "salary_split", "user_id": "split", "event_type": "salary", "description": "Confirmed salary", "category": "income", "direction": "credit", "amount": "500", "currency": "GBP", "event_date": "2026-09-05", "settlement_date": "2026-09-05", "status": "scheduled"},
+        ])
+        option_fields = ["payment_option_id", "request_id", "payment_method", "payment_amount", "number_of_payments", "first_payment_date", "payment_frequency_days", "financing_fee", "total_payable_amount"]
+        write_csv(self.root, "request_payment_options.csv", option_fields, [
+            {"payment_option_id": "opt_1", "request_id": "r_split", "payment_method": "installments", "payment_amount": "200", "number_of_payments": "2", "first_payment_date": "2026-09-01", "payment_frequency_days": "10", "financing_fee": "0", "total_payable_amount": "400"},
+        ])
+        write_csv(self.root, "exchange_rates.csv", ["rate_date", "from_currency", "to_currency", "rate"], [])
+        write_csv(self.root, "messages.csv", ["message_id", "user_id", "request_id", "related_event_id", "sent_at", "source_type", "message_text"], [])
+        write_csv(self.root, "images.csv", ["image_id", "user_id", "request_id", "related_event_id"], [])
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_generates_exact_schema_and_three_plan_types(self):
+        output = self.root / "output.csv"
+        rows = run(self.root, output)
+        self.assertEqual(tuple(rows[0]), OUTPUT_COLUMNS)
+        by_id = {row["request_id"]: row for row in rows}
+        self.assertEqual(by_id["r_full"]["affordability_status"], "affordable_now")
+        self.assertEqual(by_id["r_full"]["recommended_payment_method"], "full_payment")
+        self.assertEqual(by_id["r_wait"]["amount_safe_to_pay"], "300.00")
+        self.assertEqual(by_id["r_wait"]["recommended_payment_method"], "wait")
+        self.assertEqual(by_id["r_wait"]["earliest_date_for_full_payment"], "2026-09-10")
+        self.assertEqual(by_id["r_split"]["recommended_payment_method"], "installments")
+        self.assertEqual(by_id["r_split"]["payment_plan"], "2026-09-01:200.00|2026-09-11:200.00")
+        self.assertEqual(len(validate_output(output, {"r_full", "r_wait", "r_split"})), 3)
+
+    def test_reads_blank_event_amount_from_evidence_cache(self):
+        with (self.root / "financial_events.csv").open("a", encoding="utf-8") as handle:
+            handle.write("bill,full,bill,Phone bill,utilities,debit,,GBP,2026-09-02,2026-09-02,scheduled,,fixed,\n")
+        write_csv(self.root, "images.csv", ["image_id", "user_id", "request_id", "related_event_id"], [
+            {"image_id": "image_bill", "user_id": "full", "request_id": "", "related_event_id": "bill"},
+        ])
+        (self.root / "evidence_cache.json").write_text(json.dumps({"image_bill": {"amount": "75.50"}}), encoding="utf-8")
+        result = DecisionEngine(Dataset.load(self.root)).decide_all()[0]
+        self.assertEqual(result["amount_safe_to_pay"], "300.00")
+
+
+if __name__ == "__main__":
+    unittest.main()

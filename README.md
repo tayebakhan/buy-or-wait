@@ -14,7 +14,7 @@ The project now has two connected parts:
 1. It joins each request to the user's financial profile, events, payment options, messages and images.
 2. It converts foreign-currency events using the supplied dated exchange rates.
 3. It ignores unsafe evidence such as pending income, failed payments and unrealized investment values.
-4. It learns stable 5 to 24 day and monthly patterns from settled history, then builds a 90-day cash forecast. Transport uses the recent three-payment average, while other recurring costs use the recent three-payment median.
+4. It learns stable 5 to 24 day and monthly patterns from settled history, then builds a 90-day cash forecast. It uses recent medians for groceries and dining, longer history for transport, and six-payment averages for variable monthly bills.
 5. It tests full payment, exactly two partial payments, supplied installment offers, waiting and up to three permitted spending changes.
 6. It rejects any plan that misses the requested date or lets the balance fall below the user's chosen minimum.
 7. It writes and validates the eight required output columns.
@@ -64,7 +64,7 @@ python3 evaluation/evaluate.py \
 
 This creates `evaluation/report.md` and `evaluation/report.json` with exact-row and per-field accuracy. Equivalent money formats such as `100` and `100.00` are treated as equal. It also reports request-normalized monetary error and the share of predictions within 1% and 5% of the requested amount. Free-text explanations are excluded from exact matching.
 
-The reproducible public-sample workflow currently scores 25 solved requests at 80% for affordability status, 84% for the recommended payment method, 80% for the payment plan and 84% for the earliest full-payment date. For `amount_safe_to_pay`, the mean request-normalized error is 3.23%, 48% of predictions are within 1% of the requested amount and 84% are within 5%. Exact monetary equality remains the main improvement area.
+The reproducible public-sample workflow currently scores 25 solved requests at 80% for affordability status, 84% for the recommended payment method, 80% for the payment plan and 84% for the earliest full-payment date. For `amount_safe_to_pay`, the mean request-normalized error is 2.99%, 52% of predictions are within 1% of the requested amount and 88% are within 5%. Exact monetary equality remains the main improvement area.
 
 Before presenting a final full-dataset run, complete `evaluation/usage_report.md` with the actual provider calls, tokens and cost. The deterministic forecasting engine itself makes zero model calls.
 

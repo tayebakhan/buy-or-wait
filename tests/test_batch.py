@@ -18,10 +18,11 @@ def write_csv(root, name, fieldnames, rows):
 
 class BatchEngineTests(unittest.TestCase):
     def test_category_specific_recurring_amounts(self):
-        values = [Decimal(value) for value in ("10", "20", "30", "40", "50", "90")]
+        values = [Decimal(value) for value in ("10", "20", "30", "40", "50", "94")]
         self.assertEqual(forecast_recurring_amount("groceries", values), Decimal("50.00"))
-        self.assertEqual(forecast_recurring_amount("transport", values), Decimal("60.00"))
+        self.assertEqual(forecast_recurring_amount("transport", values), Decimal("41.00"))
         self.assertEqual(forecast_recurring_amount("dining", values), Decimal("50.00"))
+        self.assertEqual(forecast_recurring_amount("utilities", values), Decimal("40.70"))
         self.assertEqual(forecast_recurring_amount("rent", values), Decimal("50.00"))
 
     def setUp(self):

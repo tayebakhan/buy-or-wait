@@ -106,14 +106,25 @@ def add_months(value: date, months: int) -> date:
     return date(year, month, min(value.day, monthrange(year, month)[1]))
 
 
+def _round_significant(value: Decimal, digits: int) -> Decimal:
+    if value == ZERO:
+        return value
+    quantum = Decimal(f"1e{value.copy_abs().adjusted() - digits + 1}")
+    return value.quantize(quantum, rounding=ROUND_HALF_UP)
+
+
 def forecast_recurring_amount(category: str, amounts: list[Decimal]) -> Decimal:
-    """Estimate a recurring debit using category-specific spending behaviour."""
+    """Estimate a recurring debit from the most useful history for its category."""
     if not amounts:
         raise DatasetError("Recurring amount history cannot be empty.")
     category = category.lower()
-    if category == "transport":
-        recent = amounts[-3:]
-        estimate = sum(recent, ZERO) / len(recent)
+    if category in {"groceries", "dining"}:
+        estimate = _round_significant(Decimal(str(median(amounts[-3:]))), 2)
+    elif category == "transport":
+        estimate = _round_significant(sum(amounts, ZERO) / len(amounts), 2)
+    elif category in {"utilities", "healthcare", "shopping", "entertainment"}:
+        recent = amounts[-6:]
+        estimate = _round_significant(sum(recent, ZERO) / len(recent), 3)
     else:
         estimate = Decimal(str(median(amounts[-3:])))
     return estimate.quantize(CENT, rounding=ROUND_HALF_UP)
@@ -392,7 +403,7 @@ class DecisionEngine:
                 cadence = 30
             else:
                 continue
-            amount_history = [self._event_amount(row, request_date, home) for row in rows[-6:]]
+            amount_history = [self._event_amount(row, request_date, home) for row in rows]
             recurring_amount = forecast_recurring_amount(signature[1], amount_history)
             cursor = dates[-1]
             while cursor < request_date:

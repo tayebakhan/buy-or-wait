@@ -12,7 +12,13 @@ class EvidenceCacheTests(unittest.TestCase):
 
     def test_prefers_labelled_currency_amount(self):
         text = "Invoice 2026-09-01\nTotal due: EUR 625.40\nReference 88422"
-        self.assertEqual(extract_amount(text), Decimal("625.40"))
+        self.assertEqual(extract_amount(text, "Outstanding invoice"), Decimal("625.40"))
+
+    def test_uses_event_context_for_balance_and_net_pay(self):
+        receipt = "Total Amount 200,000\nAmount Received 100,000\nBalance Due 100,000"
+        payslip = "Total Earnings IDR 4,780,800\nNet Pay IDR 4,365,000"
+        self.assertEqual(extract_amount(receipt, "Outstanding rent balance"), Decimal("100000"))
+        self.assertEqual(extract_amount(payslip, "August net salary", direction="credit"), Decimal("4365000"))
 
 
 if __name__ == "__main__":

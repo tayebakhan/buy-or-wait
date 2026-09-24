@@ -238,9 +238,26 @@ class DecisionEngine:
 
     @staticmethod
     def _signature(event: dict[str, str]) -> tuple[str, str, str]:
-        description = re.sub(r"\d+", "", event.get("description", "").lower())
-        description = re.sub(r"\s+", " ", description).strip()
-        return event.get("direction", "").lower(), event.get("category", "").lower(), description
+        return (
+            event.get("direction", "").lower(),
+            event.get("category", "").lower(),
+            event.get("event_type", "").lower(),
+        )
+
+    @staticmethod
+    def _is_salary(event: dict[str, str]) -> bool:
+        text = " ".join((event.get("event_type", ""), event.get("category", ""), event.get("description", "")))
+        return bool(re.search(r"salary|payroll|wage|gaji", text, re.IGNORECASE))
+
+    @staticmethod
+    def _is_regular_salary(event: dict[str, str]) -> bool:
+        if not DecisionEngine._is_salary(event):
+            return False
+        return not bool(re.search(
+            r"bonus|commission|arrears|adjustment|prize|refund|second household|freelance",
+            event.get("description", ""),
+            re.IGNORECASE,
+        ))
 
     def _message_updates(self, user_id: str, request_date: date) -> tuple[dict[str, dict[str, str]], dict[str, str]]:
         """Read explicit amendments without letting message text control the agent.
@@ -272,12 +289,28 @@ class DecisionEngine:
                 update["event_date"] = date_matches[-1]
                 update["settlement_date"] = date_matches[-1]
             is_payroll = row.get("source_type", "").lower() == "employer" or re.search(r"\b(salary|payroll|gaji|penggajian)\b", lower)
-            confirmed = not re.search(r"\b(pending|not approved|belum disetujui|can change|if and when)\b", lower)
+            positive_confirmation = re.search(
+                r"\b(confirmed|dikonfirmasi|reduced to|naik menjadi|first salary|temporary monthly pay|gaji bulanan|gaji pokok)\b",
+                lower,
+            )
+            confirmed = bool(positive_confirmation) or not re.search(
+                r"\b(pending|not approved|belum disetujui|can change|if and when)\b",
+                lower,
+            )
+            if is_payroll and confirmed:
+                payroll["confirmed"] = "true"
             if is_payroll and confirmed and amount_match:
                 payroll["currency"] = amount_match.group(1).upper()
                 payroll["amount"] = amount_match.group(2).replace(",", "")
             if is_payroll and confirmed and date_matches:
                 payroll["date"] = date_matches[-1]
+            source = row.get("source_type", "").lower()
+            suppresses_earnings = (
+                source in {"employer", "service_provider"}
+                and re.search(r"payout is still pending|isn't withdrawable|isn’t withdrawable|no off-season income|no renewal has been confirmed", lower)
+            )
+            if suppresses_earnings:
+                payroll["suppress_income"] = "true"
         return direct, payroll
 
     def _cashflows(self, user_id: str, request_date: date, home: str) -> tuple[list[Cashflow], dict[str, dict[str, str]]]:
@@ -286,20 +319,6 @@ class DecisionEngine:
         user_events = [dict(row) for row in self.data.events if row["user_id"] == user_id]
         for event in user_events:
             event.update(direct_updates.get(event["event_id"], {}))
-        future_salary = [
-            event for event in user_events
-            if event.get("direction", "").lower() == "credit"
-            and re.search(r"salary|payroll|income|gaji", " ".join((event.get("event_type", ""), event.get("category", ""), event.get("description", ""))), re.IGNORECASE)
-            and day(event.get("settlement_date") or event.get("event_date")) >= request_date
-        ]
-        if future_salary and payroll_update:
-            next_salary = min(future_salary, key=lambda event: day(event.get("settlement_date") or event.get("event_date")))
-            if payroll_update.get("amount"):
-                next_salary["amount"] = payroll_update["amount"]
-                next_salary["currency"] = payroll_update["currency"]
-            if payroll_update.get("date"):
-                next_salary["event_date"] = payroll_update["date"]
-                next_salary["settlement_date"] = payroll_update["date"]
         by_id = {row["event_id"]: row for row in user_events}
         ignored = {"cancelled", "canceled", "failed", "rejected", "void"}
         terminal_by_link = {
@@ -330,22 +349,20 @@ class DecisionEngine:
                 history[self._signature(event)].append(event)
         for signature, rows in history.items():
             rows.sort(key=lambda row: day(row.get("settlement_date") or row.get("event_date")))
-            if len(rows) < 3:
+            if signature[0] != "debit" or len(rows) < 3:
                 continue
             dates = [day(row.get("settlement_date") or row.get("event_date")) for row in rows[-6:]]
             gaps = [(right - left).days for left, right in zip(dates, dates[1:])]
             typical = int(median(gaps)) if gaps else 0
-            if 5 <= typical <= 9:
-                cadence = 7
-            elif 12 <= typical <= 16:
-                cadence = 14
+            if 5 <= typical <= 24:
+                cadence = typical
             elif 26 <= typical <= 35:
                 cadence = 30
             else:
                 continue
             recent = rows[-3:]
             amounts = [self._event_amount(row, request_date, home) for row in recent]
-            recurring_amount = max(amounts) if signature[0] == "debit" else min(amounts)
+            recurring_amount = Decimal(str(median(amounts))).quantize(CENT, rounding=ROUND_HALF_UP)
             cursor = dates[-1]
             while cursor < request_date:
                 cursor = add_months(cursor, 1) if cadence == 30 else cursor + timedelta(days=cadence)
@@ -354,6 +371,86 @@ class DecisionEngine:
                 if (signature, cursor) not in explicit_signatures:
                     flows.append(Cashflow(template["event_id"], cursor, recurring_amount, signature[0], template.get("category", ""), True))
                 cursor = add_months(cursor, 1) if cadence == 30 else cursor + timedelta(days=cadence)
+
+        confirmed_salary = [
+            event for event in user_events
+            if event.get("direction", "").lower() == "credit"
+            and self._is_salary(event)
+            and day(event.get("settlement_date") or event.get("event_date")) >= request_date
+            and event.get("status", "").lower() in {"scheduled", "confirmed", "settled", "completed", "paid"}
+        ]
+        salary_template: dict[str, str] | None = None
+        salary_date: date | None = None
+        salary_amount: Decimal | None = None
+        if payroll_update.get("confirmed"):
+            regular_history = [
+                event for event in user_events
+                if self._is_regular_salary(event)
+                and event.get("direction", "").lower() == "credit"
+                and event.get("status", "").lower() in {"settled", "completed", "paid"}
+                and day(event.get("settlement_date") or event.get("event_date")) < request_date
+                and event.get("amount", "").strip()
+            ]
+            regular_history.sort(key=lambda event: day(event.get("settlement_date") or event.get("event_date")))
+            salary_template = regular_history[-1] if regular_history else (confirmed_salary[0] if confirmed_salary else None)
+            if payroll_update.get("date"):
+                salary_date = day(payroll_update["date"])
+            elif salary_template:
+                salary_date = day(salary_template.get("settlement_date") or salary_template.get("event_date"))
+                while salary_date < request_date:
+                    salary_date = add_months(salary_date, 1)
+            if payroll_update.get("amount"):
+                raw = money(payroll_update["amount"])
+                salary_amount = self.data.convert(raw, payroll_update.get("currency") or home, home, salary_date or request_date)
+            elif salary_template:
+                salary_amount = self._event_amount(salary_template, request_date, home)
+        elif confirmed_salary:
+            salary_template = min(confirmed_salary, key=lambda event: day(event.get("settlement_date") or event.get("event_date")))
+            salary_date = day(salary_template.get("settlement_date") or salary_template.get("event_date"))
+            salary_amount = self._event_amount(salary_template, request_date, home)
+
+        if salary_template and salary_date and salary_amount is not None:
+            existing_salary_dates = {flow.when for flow in flows if flow.direction == "credit" and self._is_salary(by_id.get(flow.event_id, {}))}
+            cursor = salary_date
+            while cursor <= horizon:
+                if cursor not in existing_salary_dates:
+                    flows.append(Cashflow(salary_template["event_id"], cursor, salary_amount, "credit", salary_template.get("category", ""), True))
+                cursor = add_months(cursor, 1)
+        elif not payroll_update.get("suppress_income"):
+            salary_history = [
+                event for event in user_events
+                if self._is_regular_salary(event)
+                and event.get("direction", "").lower() == "credit"
+                and event.get("amount", "").strip()
+                and event.get("status", "").lower() in {"settled", "completed", "paid"}
+                and day(event.get("settlement_date") or event.get("event_date")) < request_date
+            ]
+            salary_history.sort(key=lambda event: day(event.get("settlement_date") or event.get("event_date")))
+            latest_salary_text = salary_history[-1].get("description", "") if salary_history else ""
+            if re.search(r"\b(final|last)\b", latest_salary_text, re.IGNORECASE):
+                salary_history = []
+
+            stable_income: dict[int, list[dict[str, str]]] = defaultdict(list)
+            for event in salary_history:
+                when = day(event.get("settlement_date") or event.get("event_date"))
+                stable_income[when.day].append(event)
+            for rows in stable_income.values():
+                rows.sort(key=lambda event: day(event.get("settlement_date") or event.get("event_date")))
+                if len(rows) < 3:
+                    continue
+                recent = rows[-3:]
+                amounts = [self._event_amount(event, request_date, home) for event in recent]
+                dates = [day(event.get("settlement_date") or event.get("event_date")) for event in rows[-6:]]
+                gaps = [(right - left).days for left, right in zip(dates, dates[1:])]
+                if not gaps or not 26 <= int(median(gaps)) <= 35:
+                    continue
+                cursor = dates[-1]
+                while cursor < request_date:
+                    cursor = add_months(cursor, 1)
+                recurring_amount = Decimal(str(median(amounts))).quantize(CENT, rounding=ROUND_HALF_UP)
+                while cursor <= horizon:
+                    flows.append(Cashflow(rows[-1]["event_id"], cursor, recurring_amount, "credit", rows[-1].get("category", ""), True))
+                    cursor = add_months(cursor, 1)
         return sorted(flows, key=lambda flow: (flow.when, flow.direction != "credit", flow.event_id)), by_id
 
     @staticmethod
@@ -405,15 +502,17 @@ class DecisionEngine:
             event = events.get(event_id, {})
             category = event.get("category", "").lower()
             flexibility = event.get("flexibility", "").lower()
-            if category in stoppable_categories and flexibility in {"stoppable", "flexible", "optional"}:
+            if category in stoppable_categories and ("stoppable" in flexibility or flexibility in {"flexible", "optional"}):
                 candidates.append((f"stop:{event_id}", event_id, None))
-            elif category in reducible_categories and flexibility in {"reducible", "flexible"}:
+            if category in reducible_categories and ("reducible" in flexibility or flexibility == "flexible"):
                 minimum = money(event.get("minimum_allowed_amount"), blank=ZERO)
                 candidates.append((f"reduce_to:{event_id}:{fmt(minimum)}", event_id, minimum))
         candidates = candidates[:8]
         result: list[tuple[tuple[str, ...], set[str], dict[str, Decimal]]] = [((), set(), {})]
         for count in range(1, min(3, len(candidates)) + 1):
             for group in combinations(candidates, count):
+                if len({item[1] for item in group}) != len(group):
+                    continue
                 stopped = {item[1] for item in group if item[2] is None}
                 reduced = {item[1]: item[2] for item in group if item[2] is not None}
                 result.append((tuple(item[0] for item in group), stopped, reduced))

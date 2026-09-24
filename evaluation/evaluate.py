@@ -5,6 +5,7 @@ import argparse
 import csv
 import json
 import sys
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,6 +13,50 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from buy_or_wait.batch import OUTPUT_COLUMNS, DatasetError, validate_output
+
+
+def _decimal_equal(left: str, right: str) -> bool:
+    try:
+        return Decimal(left.strip()) == Decimal(right.strip())
+    except InvalidOperation:
+        return False
+
+
+def _payment_plan(value: str) -> tuple[tuple[str, Decimal], ...] | None:
+    if value.strip() == "none":
+        return ()
+    try:
+        return tuple((part.split(":", 1)[0], Decimal(part.split(":", 1)[1])) for part in value.strip().split("|"))
+    except (InvalidOperation, IndexError):
+        return None
+
+
+def _spending_changes(value: str) -> tuple[tuple[str, ...], ...] | None:
+    if value.strip() == "none":
+        return ()
+    normalized = []
+    try:
+        for part in value.strip().split("|"):
+            bits = part.split(":")
+            if bits[0] == "stop" and len(bits) == 2:
+                normalized.append(("stop", bits[1]))
+            elif bits[0] == "reduce_to" and len(bits) == 3:
+                normalized.append(("reduce_to", bits[1], str(Decimal(bits[2]).normalize())))
+            else:
+                return None
+    except InvalidOperation:
+        return None
+    return tuple(sorted(normalized))
+
+
+def field_equal(field: str, left: str, right: str) -> bool:
+    if field == "amount_safe_to_pay":
+        return _decimal_equal(left, right)
+    if field == "payment_plan":
+        return _payment_plan(left) == _payment_plan(right)
+    if field == "spending_changes_needed":
+        return _spending_changes(left) == _spending_changes(right)
+    return left.strip() == right.strip()
 
 
 def read_csv(path: Path) -> list[dict[str, str]]:
@@ -30,7 +75,7 @@ def evaluate(predictions: Path, expected: Path) -> dict[str, object]:
     per_field = {}
     for field in fields:
         matches = sum(
-            predicted[request_id].get(field, "").strip() == expected_by_id[request_id].get(field, "").strip()
+            field_equal(field, predicted[request_id].get(field, ""), expected_by_id[request_id].get(field, ""))
             for request_id in set(predicted) & set(expected_by_id)
         )
         per_field[field] = {
@@ -39,7 +84,7 @@ def evaluate(predictions: Path, expected: Path) -> dict[str, object]:
             "accuracy": round(matches / len(expected_by_id), 4) if expected_by_id else 0,
         }
     exact_rows = sum(
-        all(predicted[request_id].get(field, "").strip() == expected_by_id[request_id].get(field, "").strip() for field in fields)
+        all(field_equal(field, predicted[request_id].get(field, ""), expected_by_id[request_id].get(field, "")) for field in fields)
         for request_id in set(predicted) & set(expected_by_id)
     )
     return {

@@ -4,10 +4,19 @@ import unittest
 from pathlib import Path
 
 from buy_or_wait.batch import OUTPUT_COLUMNS
-from evaluation.evaluate import evaluate, to_markdown
+from evaluation.evaluate import evaluate, field_equal, to_markdown
 
 
 class EvaluationTests(unittest.TestCase):
+    def test_semantic_money_fields_ignore_formatting_and_change_order(self):
+        self.assertTrue(field_equal("amount_safe_to_pay", "100.00", "100"))
+        self.assertTrue(field_equal("payment_plan", "2026-09-01:100.00", "2026-09-01:100"))
+        self.assertTrue(field_equal(
+            "spending_changes_needed",
+            "stop:event_2|reduce_to:event_1:23.50",
+            "reduce_to:event_1:23.5|stop:event_2",
+        ))
+
     def test_reports_exact_and_per_field_accuracy(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

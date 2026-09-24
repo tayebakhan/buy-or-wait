@@ -14,7 +14,7 @@ The project now has two connected parts:
 1. It joins each request to the user's financial profile, events, payment options, messages and images.
 2. It converts foreign-currency events using the supplied dated exchange rates.
 3. It ignores unsafe evidence such as pending income, failed payments and unrealized investment values.
-4. It learns weekly, fortnightly and monthly patterns from settled history, then builds a 90-day cash forecast.
+4. It learns stable 5 to 24 day and monthly patterns from settled history, then builds a 90-day cash forecast.
 5. It tests full payment, exactly two partial payments, supplied installment offers, waiting and up to three permitted spending changes.
 6. It rejects any plan that misses the requested date or lets the balance fall below the user's chosen minimum.
 7. It writes and validates the eight required output columns.
@@ -62,7 +62,9 @@ python3 evaluation/evaluate.py \
   --expected dataset/sample_requests.csv
 ```
 
-This creates `evaluation/report.md` and `evaluation/report.json` with exact-row and per-field accuracy. Free-text explanations are reported but excluded from exact matching.
+This creates `evaluation/report.md` and `evaluation/report.json` with exact-row and per-field accuracy. Equivalent money formats such as `100` and `100.00` are treated as equal. Free-text explanations are excluded from exact matching.
+
+The reproducible public-sample workflow currently scores 25 solved requests at 80% for affordability status, 84% for the recommended payment method, 80% for the payment plan and 84% for the earliest full-payment date. Exact monetary forecasting remains the main improvement area.
 
 Before presenting a final full-dataset run, complete `evaluation/usage_report.md` with the actual provider calls, tokens and cost. The deterministic forecasting engine itself makes zero model calls.
 
@@ -81,7 +83,7 @@ Before presenting a final full-dataset run, complete `evaluation/usage_report.md
 
 ## Current limitations
 
-This is a strong reproducible baseline, not a claim of perfect hidden-test accuracy. Message wording outside the supported explicit patterns may need a richer multilingual evidence normalizer. Image extraction also needs either a Gemini key or a reviewed cache entry. The next improvement should measure this baseline on all 25 solved sample requests, inspect each mismatch, and improve recurrence and evidence rules without hardcoding answers.
+This is a measured reproducible baseline, not a claim of perfect hidden-test accuracy. Message wording outside the supported explicit patterns may need a richer multilingual evidence normalizer. Image extraction also needs either a Gemini key or a reviewed cache entry. The public workflow reruns all 25 solved samples after relevant engine changes so improvements can be measured without hardcoding answers.
 
 The app and batch engine do not connect to a bank. Results are estimates based only on the supplied information and are not financial advice.
 

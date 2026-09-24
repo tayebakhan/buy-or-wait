@@ -36,7 +36,33 @@ def normalize_number(raw: str) -> Decimal | None:
     return amount if amount > 0 else None
 
 
-def extract_amount(text: str) -> Decimal:
+def extract_amount(text: str, description: str = "", category: str = "", direction: str = "") -> Decimal:
+    context = f"{description} {category}".lower()
+    if direction.lower() == "credit" or re.search(r"salary|payroll|income", context):
+        priority_labels = ("net pay", "amount paid", "total earnings")
+    elif "balance" in context:
+        priority_labels = ("balance due", "outstanding balance", "amount due")
+    elif re.search(r"bill|invoice|grocer|receipt|order", context):
+        priority_labels = ("amount due till", "net amount", "cash paid", "grand total", "item bill", "total amount", "total")
+    else:
+        priority_labels = ("amount due till", "net pay", "balance due", "net amount", "grand total", "item bill", "total amount", "amount due", "total")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for label in priority_labels:
+        for index, line in enumerate(lines):
+            if label not in line.lower():
+                continue
+            position = line.lower().find(label) + len(label)
+            nearby = line[position:]
+            if not re.search(NUMBER, nearby) and index + 1 < len(lines):
+                nearby = lines[index + 1]
+            values = [
+                amount for raw in re.findall(NUMBER, nearby)
+                if (amount := normalize_number(raw)) is not None
+                and not (1900 <= amount <= 2100 and amount == amount.to_integral())
+                and amount < Decimal("1000000000000")
+            ]
+            if values:
+                return values[-1]
     labelled_candidates = []
     currency_candidates = []
     for line in text.splitlines():
@@ -73,6 +99,8 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(args.dataset)
     with (root / "images.csv").open(newline="", encoding="utf-8-sig") as handle:
         images = list(csv.DictReader(handle))
+    with (root / "financial_events.csv").open(newline="", encoding="utf-8-sig") as handle:
+        events = {row["event_id"]: row for row in csv.DictReader(handle)}
     cache = {}
     failures = []
     for row in images:
@@ -85,7 +113,13 @@ def main(argv: list[str] | None = None) -> int:
                 capture_output=True,
                 text=True,
             )
-            amount = extract_amount(result.stdout)
+            event = events.get(row.get("related_event_id", ""), {})
+            amount = extract_amount(
+                result.stdout,
+                event.get("description", ""),
+                event.get("category", ""),
+                event.get("direction", ""),
+            )
             cache[image_id] = {"amount": f"{amount:.2f}"}
             print(f"{image_id}: {amount:.2f}")
         except (OSError, subprocess.CalledProcessError, ValueError) as exc:

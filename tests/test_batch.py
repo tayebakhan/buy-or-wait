@@ -2,6 +2,8 @@ import csv
 import json
 import tempfile
 import unittest
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 from buy_or_wait.batch import Dataset, DecisionEngine, OUTPUT_COLUMNS, run, validate_output
@@ -74,6 +76,44 @@ class BatchEngineTests(unittest.TestCase):
         (self.root / "evidence_cache.json").write_text(json.dumps({"image_bill": {"amount": "75.50"}}), encoding="utf-8")
         result = DecisionEngine(Dataset.load(self.root)).decide_all()[0]
         self.assertEqual(result["amount_safe_to_pay"], "300.00")
+
+    def test_infers_variable_monthly_income_from_a_stable_pay_date(self):
+        path = self.root / "financial_events.csv"
+        with path.open(newline="", encoding="utf-8") as handle:
+            fieldnames = csv.DictReader(handle).fieldnames
+        with path.open("a", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            for index, (month, amount) in enumerate(((5, "400"), (6, "550"), (7, "450"), (8, "500")), start=1):
+                writer.writerow({
+                    "event_id": f"variable_salary_{index}", "user_id": "full", "event_type": "income",
+                    "description": "Contract payment", "category": "salary", "direction": "credit",
+                    "amount": amount, "currency": "GBP", "event_date": f"2026-{month:02d}-05",
+                    "settlement_date": f"2026-{month:02d}-05", "status": "settled",
+                    "linked_event_id": "", "flexibility": "fixed", "minimum_allowed_amount": "",
+                })
+        engine = DecisionEngine(Dataset.load(self.root))
+        flows, _ = engine._cashflows("full", date(2026, 9, 1), "GBP")
+        september_income = [flow for flow in flows if flow.direction == "credit" and flow.when == date(2026, 9, 5)]
+        self.assertEqual([flow.amount for flow in september_income], [Decimal("500.00")])
+
+    def test_does_not_repeat_a_salary_marked_final(self):
+        path = self.root / "financial_events.csv"
+        with path.open(newline="", encoding="utf-8") as handle:
+            fieldnames = csv.DictReader(handle).fieldnames
+        with path.open("a", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            for index, month in enumerate((5, 6, 7, 8), start=1):
+                writer.writerow({
+                    "event_id": f"ending_salary_{index}", "user_id": "full", "event_type": "income",
+                    "description": "Final payroll" if month == 8 else "Payroll", "category": "salary",
+                    "direction": "credit", "amount": "500", "currency": "GBP",
+                    "event_date": f"2026-{month:02d}-15", "settlement_date": f"2026-{month:02d}-15",
+                    "status": "settled", "linked_event_id": "", "flexibility": "fixed",
+                    "minimum_allowed_amount": "",
+                })
+        engine = DecisionEngine(Dataset.load(self.root))
+        flows, _ = engine._cashflows("full", date(2026, 9, 1), "GBP")
+        self.assertFalse(any(flow.direction == "credit" for flow in flows))
 
 
 if __name__ == "__main__":

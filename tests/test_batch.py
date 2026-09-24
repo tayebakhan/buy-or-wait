@@ -115,6 +115,41 @@ class BatchEngineTests(unittest.TestCase):
         flows, _ = engine._cashflows("full", date(2026, 9, 1), "GBP")
         self.assertFalse(any(flow.direction == "credit" for flow in flows))
 
+    def test_temporary_salary_applies_for_one_cycle_then_returns_to_usual_pay(self):
+        event_path = self.root / "financial_events.csv"
+        with event_path.open(newline="", encoding="utf-8") as handle:
+            fieldnames = csv.DictReader(handle).fieldnames
+        with event_path.open("a", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            for index, month in enumerate((5, 6, 7, 8), start=1):
+                writer.writerow({
+                    "event_id": f"usual_salary_{index}", "user_id": "wait", "event_type": "salary",
+                    "description": "Payroll", "category": "salary", "direction": "credit", "amount": "1000",
+                    "currency": "GBP", "event_date": f"2026-{month:02d}-10",
+                    "settlement_date": f"2026-{month:02d}-10", "status": "settled",
+                    "linked_event_id": "", "flexibility": "fixed", "minimum_allowed_amount": "",
+                })
+        write_csv(self.root, "messages.csv", ["message_id", "user_id", "request_id", "related_event_id", "sent_at", "source_type", "message_text"], [{
+            "message_id": "temporary_pay", "user_id": "wait", "request_id": "r_wait", "related_event_id": "",
+            "sent_at": "2026-08-28T09:00:00Z", "source_type": "employer",
+            "message_text": "Your temporary monthly pay is GBP 500. The reduced amount continues for the next payroll.",
+        }])
+        engine = DecisionEngine(Dataset.load(self.root))
+        flows, _ = engine._cashflows("wait", date(2026, 9, 1), "GBP")
+        salaries = [(flow.when, flow.amount) for flow in flows if flow.direction == "credit"]
+        self.assertIn((date(2026, 9, 10), Decimal("500.00")), salaries)
+        self.assertIn((date(2026, 10, 10), Decimal("1000.00")), salaries)
+
+    def test_adds_confirmed_invoice_credit_from_provider_message(self):
+        write_csv(self.root, "messages.csv", ["message_id", "user_id", "request_id", "related_event_id", "sent_at", "source_type", "message_text"], [{
+            "message_id": "invoice", "user_id": "full", "request_id": "r_full", "related_event_id": "",
+            "sent_at": "2026-08-28T09:00:00Z", "source_type": "service_provider",
+            "message_text": "The client approved an invoice payment of GBP 300. Settlement is expected on 2026-09-12.",
+        }])
+        engine = DecisionEngine(Dataset.load(self.root))
+        flows, _ = engine._cashflows("full", date(2026, 9, 1), "GBP")
+        self.assertIn((date(2026, 9, 12), Decimal("300.00")), [(flow.when, flow.amount) for flow in flows if flow.direction == "credit"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -41,6 +41,30 @@ class EvaluationTests(unittest.TestCase):
             self.assertEqual(result["exact_row_accuracy"], 1.0)
             self.assertIn("100.0%", to_markdown(result))
 
+    def test_reports_request_normalized_money_error(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            prediction = root / "prediction.csv"
+            expected = root / "expected.csv"
+            predicted_row = {
+                "request_id": "request_1", "amount_safe_to_pay": "90", "affordability_status": "affordable_now",
+                "recommended_payment_method": "full_payment", "payment_plan": "2026-09-01:100",
+                "earliest_date_for_full_payment": "2026-09-01", "spending_changes_needed": "none",
+                "decision_explanation": "Safe.",
+            }
+            expected_row = {**predicted_row, "amount_safe_to_pay": "100", "requested_amount": "200"}
+            with prediction.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=OUTPUT_COLUMNS)
+                writer.writeheader()
+                writer.writerow(predicted_row)
+            with expected.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=(*OUTPUT_COLUMNS, "requested_amount"))
+                writer.writeheader()
+                writer.writerow(expected_row)
+            result = evaluate(prediction, expected)
+            self.assertEqual(result["amount_quality"]["mean_request_normalized_absolute_error"], 0.05)
+            self.assertEqual(result["amount_quality"]["within_5_percent_of_request"], 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

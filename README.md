@@ -62,9 +62,9 @@ python3 evaluation/evaluate.py \
   --expected dataset/sample_requests.csv
 ```
 
-This creates `evaluation/report.md` and `evaluation/report.json` with exact-row and per-field accuracy. Equivalent money formats such as `100` and `100.00` are treated as equal. Free-text explanations are excluded from exact matching.
+This creates `evaluation/report.md` and `evaluation/report.json` with exact-row and per-field accuracy. Equivalent money formats such as `100` and `100.00` are treated as equal. It also reports request-normalized monetary error and the share of predictions within 1% and 5% of the requested amount. Free-text explanations are excluded from exact matching.
 
-The reproducible public-sample workflow currently scores 25 solved requests at 80% for affordability status, 84% for the recommended payment method, 80% for the payment plan and 84% for the earliest full-payment date. Exact monetary forecasting remains the main improvement area.
+The reproducible public-sample workflow currently scores 25 solved requests at 80% for affordability status, 84% for the recommended payment method, 80% for the payment plan and 84% for the earliest full-payment date. For `amount_safe_to_pay`, 48% of predictions are within 1% of the requested amount and 84% are within 5%. Exact monetary equality remains the main improvement area.
 
 Before presenting a final full-dataset run, complete `evaluation/usage_report.md` with the actual provider calls, tokens and cost. The deterministic forecasting engine itself makes zero model calls.
 
@@ -75,6 +75,7 @@ Before presenting a final full-dataset run, complete `evaluation/usage_report.md
 - Dated currency conversion
 - Conflict handling for linked, cancelled, failed, settled and pending records
 - Common explicit message amendments for amounts, salary dates and event status
+- One-cycle reduced salary handling and confirmed provider invoice income
 - Recurring cashflow inference from settled history
 - Full, partial, installment, delayed and flexible-spending comparisons
 - A payment schedule, earliest full-payment date and 90-day balance forecast

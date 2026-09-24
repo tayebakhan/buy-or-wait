@@ -12,7 +12,7 @@ import mimetypes
 import os
 import re
 from calendar import monthrange
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
@@ -274,6 +274,7 @@ class DecisionEngine:
         for row in rows:
             text = row.get("message_text", "")
             lower = text.lower()
+            source = row.get("source_type", "").lower()
             related = row.get("related_event_id", "")
             update = direct.setdefault(related, {}) if related else {}
             if re.search(r"\b(cancelled|canceled|voided|dibatalkan)\b", lower):
@@ -288,7 +289,7 @@ class DecisionEngine:
             if related and date_matches and re.search(r"\b(revised|updated|delayed|postponed|expected|diperkirakan)\b", lower):
                 update["event_date"] = date_matches[-1]
                 update["settlement_date"] = date_matches[-1]
-            is_payroll = row.get("source_type", "").lower() == "employer" or re.search(r"\b(salary|payroll|gaji|penggajian)\b", lower)
+            is_payroll = source == "employer" or re.search(r"\b(salary|payroll|gaji|penggajian)\b", lower)
             positive_confirmation = re.search(
                 r"\b(confirmed|dikonfirmasi|reduced to|naik menjadi|first salary|temporary monthly pay|gaji bulanan|gaji pokok)\b",
                 lower,
@@ -304,10 +305,27 @@ class DecisionEngine:
                 payroll["amount"] = amount_match.group(2).replace(",", "")
             if is_payroll and confirmed and date_matches:
                 payroll["date"] = date_matches[-1]
-            source = row.get("source_type", "").lower()
+            if is_payroll and re.search(
+                r"temporary monthly pay|next salary is reduced|gaji bulanan sementara|jumlah yang lebih rendah masih berlaku",
+                lower,
+            ):
+                payroll["one_cycle"] = "true"
+            approved_invoice = re.search(
+                r"approved an invoice payment|menyetujui pembayaran faktur",
+                lower,
+            )
+            if source == "service_provider" and approved_invoice and amount_match and date_matches:
+                payroll["confirmed_credit_currency"] = amount_match.group(1).upper()
+                payroll["confirmed_credit_amount"] = amount_match.group(2).replace(",", "")
+                payroll["confirmed_credit_date"] = date_matches[-1]
             suppresses_earnings = (
                 source in {"employer", "service_provider"}
-                and re.search(r"payout is still pending|isn't withdrawable|isn’t withdrawable|no off-season income|no renewal has been confirmed", lower)
+                and re.search(
+                    r"payout is still pending|isn't withdrawable|isn’t withdrawable|no off-season income|"
+                    r"no renewal has been confirmed|employment has ended|employment record has ended|"
+                    r"kontrak musiman saat ini telah berakhir|sumber pendapatan kerja rumah tangga telah berakhir",
+                    lower,
+                )
             )
             if suppresses_earnings:
                 payroll["suppress_income"] = "true"
@@ -354,19 +372,18 @@ class DecisionEngine:
             dates = [day(row.get("settlement_date") or row.get("event_date")) for row in rows[-6:]]
             gaps = [(right - left).days for left, right in zip(dates, dates[1:])]
             typical = int(median(gaps)) if gaps else 0
+            template = rows[-1]
             if 5 <= typical <= 24:
                 cadence = typical
             elif 26 <= typical <= 35:
                 cadence = 30
             else:
                 continue
-            recent = rows[-3:]
-            amounts = [self._event_amount(row, request_date, home) for row in recent]
+            amounts = [self._event_amount(row, request_date, home) for row in rows[-3:]]
             recurring_amount = Decimal(str(median(amounts))).quantize(CENT, rounding=ROUND_HALF_UP)
             cursor = dates[-1]
             while cursor < request_date:
                 cursor = add_months(cursor, 1) if cadence == 30 else cursor + timedelta(days=cadence)
-            template = rows[-1]
             while cursor <= horizon:
                 if (signature, cursor) not in explicit_signatures:
                     flows.append(Cashflow(template["event_id"], cursor, recurring_amount, signature[0], template.get("category", ""), True))
@@ -410,12 +427,29 @@ class DecisionEngine:
             salary_amount = self._event_amount(salary_template, request_date, home)
 
         if salary_template and salary_date and salary_amount is not None:
-            existing_salary_dates = {flow.when for flow in flows if flow.direction == "credit" and self._is_salary(by_id.get(flow.event_id, {}))}
+            regular_salary_ids = {
+                event["event_id"] for event in user_events if self._is_regular_salary(event)
+            }
+            flows = [
+                flow for flow in flows
+                if not (flow.direction == "credit" and flow.event_id in regular_salary_ids and flow.when >= salary_date)
+            ]
+            historical_amounts = [
+                self._event_amount(event, request_date, home)
+                for event in user_events
+                if event["event_id"] in regular_salary_ids
+                and event.get("status", "").lower() in {"settled", "completed", "paid"}
+                and day(event.get("settlement_date") or event.get("event_date")) < request_date
+                and event.get("amount", "").strip()
+            ]
+            usual_salary = Counter(historical_amounts).most_common(1)[0][0] if historical_amounts else salary_amount
             cursor = salary_date
+            cycle = 0
             while cursor <= horizon:
-                if cursor not in existing_salary_dates:
-                    flows.append(Cashflow(salary_template["event_id"], cursor, salary_amount, "credit", salary_template.get("category", ""), True))
+                cycle_amount = salary_amount if cycle == 0 or not payroll_update.get("one_cycle") else usual_salary
+                flows.append(Cashflow(salary_template["event_id"], cursor, cycle_amount, "credit", salary_template.get("category", ""), True))
                 cursor = add_months(cursor, 1)
+                cycle += 1
         elif not payroll_update.get("suppress_income"):
             salary_history = [
                 event for event in user_events
@@ -451,6 +485,19 @@ class DecisionEngine:
                 while cursor <= horizon:
                     flows.append(Cashflow(rows[-1]["event_id"], cursor, recurring_amount, "credit", rows[-1].get("category", ""), True))
                     cursor = add_months(cursor, 1)
+
+        if payroll_update.get("confirmed_credit_amount") and payroll_update.get("confirmed_credit_date"):
+            credit_day = day(payroll_update["confirmed_credit_date"])
+            if request_date <= credit_day <= horizon:
+                raw = money(payroll_update["confirmed_credit_amount"])
+                converted = self.data.convert(
+                    raw,
+                    payroll_update.get("confirmed_credit_currency") or home,
+                    home,
+                    credit_day,
+                )
+                flows.append(Cashflow("message_confirmed_credit", credit_day, converted, "credit", "income", True))
+
         return sorted(flows, key=lambda flow: (flow.when, flow.direction != "credit", flow.event_id)), by_id
 
     @staticmethod

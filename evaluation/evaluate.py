@@ -87,6 +87,24 @@ def evaluate(predictions: Path, expected: Path) -> dict[str, object]:
         all(field_equal(field, predicted[request_id].get(field, ""), expected_by_id[request_id].get(field, "")) for field in fields)
         for request_id in set(predicted) & set(expected_by_id)
     )
+    amount_errors = []
+    for request_id in set(predicted) & set(expected_by_id):
+        expected_row = expected_by_id[request_id]
+        try:
+            actual_amount = Decimal(predicted[request_id]["amount_safe_to_pay"])
+            expected_amount = Decimal(expected_row["amount_safe_to_pay"])
+            requested_amount = Decimal(expected_row.get("requested_amount", ""))
+        except InvalidOperation:
+            continue
+        if requested_amount <= 0:
+            continue
+        amount_errors.append(abs(actual_amount - expected_amount) / requested_amount)
+    amount_quality = {
+        "rows_scored": len(amount_errors),
+        "mean_request_normalized_absolute_error": round(float(sum(amount_errors) / len(amount_errors)), 4) if amount_errors else None,
+        "within_1_percent_of_request": round(sum(error <= Decimal("0.01") for error in amount_errors) / len(amount_errors), 4) if amount_errors else None,
+        "within_5_percent_of_request": round(sum(error <= Decimal("0.05") for error in amount_errors) / len(amount_errors), 4) if amount_errors else None,
+    }
     return {
         "expected_rows": len(expected_by_id),
         "predicted_rows": len(predicted),
@@ -95,6 +113,7 @@ def evaluate(predictions: Path, expected: Path) -> dict[str, object]:
         "exact_rows": exact_rows,
         "exact_row_accuracy": round(exact_rows / len(expected_by_id), 4) if expected_by_id else 0,
         "per_field": per_field,
+        "amount_quality": amount_quality,
         "note": "decision_explanation is excluded from exact matching because it is free text",
     }
 
@@ -110,6 +129,20 @@ def to_markdown(result: dict[str, object]) -> str:
     ]
     for field, values in result["per_field"].items():
         lines.append(f"| `{field}` | {values['matches']} / {values['total']} | {values['accuracy']:.1%} |")
+    amount_quality = result["amount_quality"]
+    mean_error = amount_quality["mean_request_normalized_absolute_error"]
+    within_one = amount_quality["within_1_percent_of_request"]
+    within_five = amount_quality["within_5_percent_of_request"]
+    lines.extend([
+        "",
+        "## Monetary error",
+        "",
+        f"Mean absolute error as a share of the requested amount: {mean_error:.1%}" if mean_error is not None else "Mean absolute error as a share of the requested amount: not available",
+        "",
+        f"Within 1% of the requested amount: {within_one:.1%}" if within_one is not None else "Within 1% of the requested amount: not available",
+        "",
+        f"Within 5% of the requested amount: {within_five:.1%}" if within_five is not None else "Within 5% of the requested amount: not available",
+    ])
     lines.extend([
         "",
         f"Missing request IDs: {', '.join(result['missing_request_ids']) or 'none'}",

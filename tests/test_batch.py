@@ -6,7 +6,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-from buy_or_wait.batch import Dataset, DecisionEngine, OUTPUT_COLUMNS, run, validate_output
+from buy_or_wait.batch import Dataset, DecisionEngine, OUTPUT_COLUMNS, forecast_recurring_amount, run, validate_output
 
 
 def write_csv(root, name, fieldnames, rows):
@@ -17,6 +17,13 @@ def write_csv(root, name, fieldnames, rows):
 
 
 class BatchEngineTests(unittest.TestCase):
+    def test_category_specific_recurring_amounts(self):
+        values = [Decimal(value) for value in ("10", "20", "30", "40", "50", "90")]
+        self.assertEqual(forecast_recurring_amount("groceries", values), Decimal("50.00"))
+        self.assertEqual(forecast_recurring_amount("transport", values), Decimal("60.00"))
+        self.assertEqual(forecast_recurring_amount("dining", values), Decimal("50.00"))
+        self.assertEqual(forecast_recurring_amount("rent", values), Decimal("50.00"))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

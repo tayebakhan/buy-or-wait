@@ -106,6 +106,19 @@ def add_months(value: date, months: int) -> date:
     return date(year, month, min(value.day, monthrange(year, month)[1]))
 
 
+def forecast_recurring_amount(category: str, amounts: list[Decimal]) -> Decimal:
+    """Estimate a recurring debit using category-specific spending behaviour."""
+    if not amounts:
+        raise DatasetError("Recurring amount history cannot be empty.")
+    category = category.lower()
+    if category == "transport":
+        recent = amounts[-3:]
+        estimate = sum(recent, ZERO) / len(recent)
+    else:
+        estimate = Decimal(str(median(amounts[-3:])))
+    return estimate.quantize(CENT, rounding=ROUND_HALF_UP)
+
+
 def _load_csv(root: Path, kind: str, *, optional: bool = False) -> list[dict[str, str]]:
     selected = next((root / name for name in FILE_ALIASES[kind] if (root / name).exists()), None)
     if selected is None:
@@ -379,8 +392,8 @@ class DecisionEngine:
                 cadence = 30
             else:
                 continue
-            amounts = [self._event_amount(row, request_date, home) for row in rows[-3:]]
-            recurring_amount = Decimal(str(median(amounts))).quantize(CENT, rounding=ROUND_HALF_UP)
+            amount_history = [self._event_amount(row, request_date, home) for row in rows[-6:]]
+            recurring_amount = forecast_recurring_amount(signature[1], amount_history)
             cursor = dates[-1]
             while cursor < request_date:
                 cursor = add_months(cursor, 1) if cadence == 30 else cursor + timedelta(days=cadence)

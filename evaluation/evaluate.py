@@ -101,7 +101,7 @@ def evaluate(predictions: Path, expected: Path) -> dict[str, object]:
         amount_errors.append(abs(actual_amount - expected_amount) / requested_amount)
     amount_quality = {
         "rows_scored": len(amount_errors),
-        "mean_request_normalized_absolute_error": round(float(sum(amount_errors) / len(amount_errors)), 4) if amount_errors else None,
+        "mean_request_normalized_absolute_error": round(float(sum(amount_errors) / len(amount_errors)), 6) if amount_errors else None,
         "within_1_percent_of_request": round(sum(error <= Decimal("0.01") for error in amount_errors) / len(amount_errors), 4) if amount_errors else None,
         "within_5_percent_of_request": round(sum(error <= Decimal("0.05") for error in amount_errors) / len(amount_errors), 4) if amount_errors else None,
     }
@@ -137,7 +137,7 @@ def to_markdown(result: dict[str, object]) -> str:
         "",
         "## Monetary error",
         "",
-        f"Mean absolute error as a share of the requested amount: {mean_error:.1%}" if mean_error is not None else "Mean absolute error as a share of the requested amount: not available",
+        f"Mean absolute error as a share of the requested amount: {mean_error:.2%}" if mean_error is not None else "Mean absolute error as a share of the requested amount: not available",
         "",
         f"Within 1% of the requested amount: {within_one:.1%}" if within_one is not None else "Within 1% of the requested amount: not available",
         "",

@@ -1,7 +1,7 @@
 import unittest
 from decimal import Decimal
 
-from evaluation.build_evidence_cache import extract_amount, normalize_number
+from evaluation.build_evidence_cache import extract_amount, extract_consensus_amount, normalize_number
 
 
 class EvidenceCacheTests(unittest.TestCase):
@@ -19,6 +19,14 @@ class EvidenceCacheTests(unittest.TestCase):
         payslip = "Total Earnings IDR 4,780,800\nNet Pay IDR 4,365,000"
         self.assertEqual(extract_amount(receipt, "Outstanding rent balance"), Decimal("100000"))
         self.assertEqual(extract_amount(payslip, "August net salary", direction="credit"), Decimal("4365000"))
+
+    def test_uses_consensus_across_ocr_layout_modes(self):
+        texts = [
+            "Grand Total ₹2.00",
+            "Grand Total ₹2,298",
+            "TOTAL AMOUNT ₹2,298",
+        ]
+        self.assertEqual(extract_consensus_amount(texts, "Grocery receipt"), Decimal("2298"))
 
 
 if __name__ == "__main__":

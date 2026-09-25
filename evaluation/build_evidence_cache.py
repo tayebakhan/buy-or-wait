@@ -10,6 +10,7 @@ import csv
 import json
 import re
 import subprocess
+from collections import Counter
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -91,6 +92,22 @@ def extract_amount(text: str, description: str = "", category: str = "", directi
     return max(parsed)
 
 
+def extract_consensus_amount(
+    texts: list[str], description: str = "", category: str = "", direction: str = ""
+) -> Decimal:
+    """Prefer an amount independently found by multiple OCR layout modes."""
+    candidates = []
+    for text in texts:
+        try:
+            candidates.append(extract_amount(text, description, category, direction))
+        except ValueError:
+            continue
+    if not candidates:
+        raise ValueError("No positive amount found in OCR text")
+    counts = Counter(candidates)
+    return max(candidates, key=lambda amount: (counts[amount], -candidates.index(amount)))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", default="dataset")
@@ -107,15 +124,18 @@ def main(argv: list[str] | None = None) -> int:
         image_id = row["image_id"]
         path = root / "media" / "images" / f"{image_id}.png"
         try:
-            result = subprocess.run(
-                ["tesseract", str(path), "stdout"],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+            texts = []
+            for page_mode in ("3", "4", "6"):
+                result = subprocess.run(
+                    ["tesseract", str(path), "stdout", "--psm", page_mode],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                texts.append(result.stdout)
             event = events.get(row.get("related_event_id", ""), {})
-            amount = extract_amount(
-                result.stdout,
+            amount = extract_consensus_amount(
+                texts,
                 event.get("description", ""),
                 event.get("category", ""),
                 event.get("direction", ""),

@@ -158,6 +158,67 @@ class BatchEngineTests(unittest.TestCase):
         flows, _ = engine._cashflows("full", date(2026, 9, 1), "GBP")
         self.assertIn((date(2026, 9, 12), Decimal("300.00")), [(flow.when, flow.amount) for flow in flows if flow.direction == "credit"])
 
+    def test_adds_one_time_payroll_arrears_only_once(self):
+        event_path = self.root / "financial_events.csv"
+        with event_path.open(newline="", encoding="utf-8") as handle:
+            fieldnames = csv.DictReader(handle).fieldnames
+        with event_path.open("a", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            for index, month in enumerate((6, 7, 8), start=1):
+                writer.writerow({
+                    "event_id": f"arrears_salary_{index}", "user_id": "wait", "event_type": "salary",
+                    "description": "Payroll", "category": "salary", "direction": "credit", "amount": "500",
+                    "currency": "GBP", "event_date": f"2026-{month:02d}-10",
+                    "settlement_date": f"2026-{month:02d}-10", "status": "settled",
+                    "linked_event_id": "", "flexibility": "fixed", "minimum_allowed_amount": "",
+                })
+        write_csv(self.root, "messages.csv", ["message_id", "user_id", "request_id", "related_event_id", "sent_at", "source_type", "message_text"], [{
+            "message_id": "arrears", "user_id": "wait", "request_id": "r_wait", "related_event_id": "",
+            "sent_at": "2026-08-28T09:00:00Z", "source_type": "employer",
+            "message_text": "Your regular salary for the next payroll is GBP 500. It also includes a one-time arrears adjustment of GBP 125.",
+        }])
+        flows, _ = DecisionEngine(Dataset.load(self.root))._cashflows("wait", date(2026, 9, 1), "GBP")
+        credits = [(flow.when, flow.amount) for flow in flows if flow.direction == "credit"]
+        self.assertEqual(credits.count((date(2026, 9, 10), Decimal("125.00"))), 1)
+        self.assertNotIn((date(2026, 10, 10), Decimal("125.00")), credits)
+
+    def test_applies_announced_rent_increase_to_next_cycle(self):
+        event_path = self.root / "financial_events.csv"
+        with event_path.open(newline="", encoding="utf-8") as handle:
+            fieldnames = csv.DictReader(handle).fieldnames
+        with event_path.open("a", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            for index, month in enumerate((6, 7, 8), start=1):
+                writer.writerow({
+                    "event_id": f"rent_{index}", "user_id": "full", "event_type": "bill",
+                    "description": "Monthly rent", "category": "rent", "direction": "debit", "amount": "100",
+                    "currency": "GBP", "event_date": f"2026-{month:02d}-01",
+                    "settlement_date": f"2026-{month:02d}-01", "status": "settled",
+                    "linked_event_id": "", "flexibility": "fixed", "minimum_allowed_amount": "",
+                })
+        write_csv(self.root, "messages.csv", ["message_id", "user_id", "request_id", "related_event_id", "sent_at", "source_type", "message_text"], [{
+            "message_id": "rent_rise", "user_id": "full", "request_id": "r_full", "related_event_id": "",
+            "sent_at": "2026-08-25T09:00:00Z", "source_type": "landlord",
+            "message_text": "The renewed lease increases monthly rent by 12% from the next payment.",
+        }])
+        flows, _ = DecisionEngine(Dataset.load(self.root))._cashflows("full", date(2026, 9, 1), "GBP")
+        rent = [flow.amount for flow in flows if flow.category == "rent" and flow.when == date(2026, 9, 1)]
+        self.assertEqual(rent, [Decimal("112.00")])
+
+    def test_retries_a_failed_bill_that_remains_outstanding(self):
+        with (self.root / "financial_events.csv").open("a", encoding="utf-8") as handle:
+            handle.write("failed_bill,full,bill,Energy bill,utilities,debit,75,GBP,2026-08-28,2026-08-28,failed,,fixed,\n")
+        write_csv(self.root, "messages.csv", ["message_id", "user_id", "request_id", "related_event_id", "sent_at", "source_type", "message_text"], [{
+            "message_id": "bill_retry", "user_id": "full", "request_id": "r_full", "related_event_id": "failed_bill",
+            "sent_at": "2026-08-30T09:00:00Z", "source_type": "utility_provider",
+            "message_text": "The bill is still outstanding and another debit will be attempted.",
+        }])
+        flows, _ = DecisionEngine(Dataset.load(self.root))._cashflows("full", date(2026, 9, 1), "GBP")
+        self.assertIn(
+            (date(2026, 9, 1), Decimal("75.00")),
+            [(flow.when, flow.amount) for flow in flows if flow.event_id == "failed_bill"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -305,14 +305,26 @@ class DecisionEngine:
                 update["status"] = "cancelled"
             elif re.search(r"\b(completed|settled|paid|reached your account|telah masuk)\b", lower):
                 update["status"] = "settled"
-            amount_match = re.search(r"\b(GBP|USD|EUR|INR|ZAR|IDR)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)", text, re.IGNORECASE)
+            amount_matches = re.findall(
+                r"\b(GBP|USD|EUR|INR|ZAR|IDR)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)",
+                text,
+                re.IGNORECASE,
+            )
+            amount_match = amount_matches[0] if amount_matches else None
             date_matches = re.findall(r"\b20\d{2}-\d{2}-\d{2}\b", text)
             if related and amount_match and not re.search(r"\b(pending|belum|not approved|can change)\b", lower):
-                update["currency"] = amount_match.group(1).upper()
-                update["amount"] = amount_match.group(2).replace(",", "")
+                update["currency"] = amount_match[0].upper()
+                update["amount"] = amount_match[1].replace(",", "")
             if related and date_matches and re.search(r"\b(revised|updated|delayed|postponed|expected|diperkirakan)\b", lower):
                 update["event_date"] = date_matches[-1]
                 update["settlement_date"] = date_matches[-1]
+            if related and re.search(
+                r"bill is still (?:outstanding|open).*another debit (?:will|may) be attempted|"
+                r"tagihan.*masih.*debit.*(?:akan|dapat) dicoba",
+                lower,
+            ):
+                update["status"] = "scheduled"
+                update["retry_outstanding"] = "true"
             is_payroll = source == "employer" or re.search(r"\b(salary|payroll|gaji|penggajian)\b", lower)
             positive_confirmation = re.search(
                 r"\b(confirmed|dikonfirmasi|reduced to|naik menjadi|first salary|temporary monthly pay|gaji bulanan|gaji pokok)\b",
@@ -325,10 +337,16 @@ class DecisionEngine:
             if is_payroll and confirmed:
                 payroll["confirmed"] = "true"
             if is_payroll and confirmed and amount_match:
-                payroll["currency"] = amount_match.group(1).upper()
-                payroll["amount"] = amount_match.group(2).replace(",", "")
+                payroll["currency"] = amount_match[0].upper()
+                payroll["amount"] = amount_match[1].replace(",", "")
             if is_payroll and confirmed and date_matches:
                 payroll["date"] = date_matches[-1]
+            if is_payroll and confirmed and len(amount_matches) > 1 and re.search(
+                r"one-time arrears adjustment|penyesuaian tunggakan satu kali",
+                lower,
+            ):
+                payroll["one_time_credit_currency"] = amount_matches[1][0].upper()
+                payroll["one_time_credit_amount"] = amount_matches[1][1].replace(",", "")
             if is_payroll and re.search(
                 r"temporary monthly pay|next salary is reduced|gaji bulanan sementara|jumlah yang lebih rendah masih berlaku",
                 lower,
@@ -339,9 +357,18 @@ class DecisionEngine:
                 lower,
             )
             if source == "service_provider" and approved_invoice and amount_match and date_matches:
-                payroll["confirmed_credit_currency"] = amount_match.group(1).upper()
-                payroll["confirmed_credit_amount"] = amount_match.group(2).replace(",", "")
+                payroll["confirmed_credit_currency"] = amount_match[0].upper()
+                payroll["confirmed_credit_amount"] = amount_match[1].replace(",", "")
                 payroll["confirmed_credit_date"] = date_matches[-1]
+            rent_increase = re.search(
+                r"(?:increases?|raises?).{0,30}(?:monthly )?rent (?:by )?(\d+(?:\.\d+)?)%|"
+                r"menaikkan.{0,30}sewa bulanan (?:sebesar )?(\d+(?:\.\d+)?)%",
+                lower,
+            )
+            if rent_increase:
+                percentage = Decimal(next(value for value in rent_increase.groups() if value is not None))
+                payroll["rent_multiplier"] = str(Decimal("1") + percentage / Decimal("100"))
+                payroll["rent_change_date"] = row.get("sent_at", "")[:10]
             suppresses_earnings = (
                 source in {"employer", "service_provider"}
                 and re.search(
@@ -375,6 +402,8 @@ class DecisionEngine:
             direction = event.get("direction", "").lower()
             event_kind = " ".join((event.get("event_type", ""), event.get("category", ""))).lower()
             when = day(event.get("settlement_date") or event.get("event_date"))
+            if event.get("retry_outstanding") == "true" and when < request_date:
+                when = request_date
             if status in ignored or (direction == "credit" and status == "pending") or re.search(r"unrealized|market.?value|valuation", event_kind):
                 continue
             if event["event_id"] in terminal_by_link and terminal_by_link[event["event_id"]] is not event:
@@ -405,6 +434,16 @@ class DecisionEngine:
                 continue
             amount_history = [self._event_amount(row, request_date, home) for row in rows]
             recurring_amount = forecast_recurring_amount(signature[1], amount_history)
+            if signature[1] == "rent" and payroll_update.get("rent_multiplier"):
+                announced = day(payroll_update.get("rent_change_date"), blank=request_date)
+                already_reflected = any(
+                    day(row.get("settlement_date") or row.get("event_date")) > announced
+                    for row in rows
+                )
+                if not already_reflected:
+                    recurring_amount = (
+                        recurring_amount * Decimal(payroll_update["rent_multiplier"])
+                    ).quantize(CENT, rounding=ROUND_HALF_UP)
             cursor = dates[-1]
             while cursor < request_date:
                 cursor = add_months(cursor, 1) if cadence == 30 else cursor + timedelta(days=cadence)
@@ -474,6 +513,29 @@ class DecisionEngine:
                 flows.append(Cashflow(salary_template["event_id"], cursor, cycle_amount, "credit", salary_template.get("category", ""), True))
                 cursor = add_months(cursor, 1)
                 cycle += 1
+            if payroll_update.get("one_time_credit_amount") and request_date <= salary_date <= horizon:
+                raw = money(payroll_update["one_time_credit_amount"])
+                adjustment = self.data.convert(
+                    raw,
+                    payroll_update.get("one_time_credit_currency") or home,
+                    home,
+                    salary_date,
+                )
+                if not any(
+                    flow.direction == "credit"
+                    and flow.when == salary_date
+                    and flow.amount == adjustment
+                    and flow.event_id != salary_template["event_id"]
+                    for flow in flows
+                ):
+                    flows.append(Cashflow(
+                        "message_one_time_credit",
+                        salary_date,
+                        adjustment,
+                        "credit",
+                        "income",
+                        True,
+                    ))
         elif not payroll_update.get("suppress_income"):
             salary_history = [
                 event for event in user_events

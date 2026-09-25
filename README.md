@@ -143,7 +143,7 @@ buy_or_wait/batch.py         Challenge dataset agent
 code/main.py                 Batch command-line entry point
 evaluation/                  Reproducible scoring and evidence tools
 tests/                       Unit and integration tests
-docs/                        Screenshots, demo and portfolio copy
+docs/                        Screenshots and demo assets
 ```
 
 ## Safety and limitations

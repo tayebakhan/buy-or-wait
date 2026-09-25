@@ -1,48 +1,118 @@
 # Buy or Wait?
 
-An AI-assisted financial planning project that answers a simple question: can someone safely afford a purchase now, with a plan, later, or not within the next 90 days?
+[![Tests](https://github.com/tayebakhan/buy-or-wait/actions/workflows/tests.yml/badge.svg)](https://github.com/tayebakhan/buy-or-wait/actions/workflows/tests.yml)
+[![Public sample baseline](https://github.com/tayebakhan/buy-or-wait/actions/workflows/baseline.yml/badge.svg)](https://github.com/tayebakhan/buy-or-wait/actions/workflows/baseline.yml)
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-live-FF4B4B?logo=streamlit&logoColor=white)](https://buy-or-wait-xf8arqodck2gxvkesbckb5.streamlit.app/)
 
-Try the live app: [buy-or-wait-xf8arqodck2gxvkesbckb5.streamlit.app](https://buy-or-wait-xf8arqodck2gxvkesbckb5.streamlit.app/)
+An AI-assisted financial planning agent that answers a practical question: **can I safely afford this purchase?**
 
-The project now has two connected parts:
+Instead of checking only the current balance, it forecasts income, bills, essential spending, pending payments and a user-selected safety buffer. It then recommends paying in full, splitting the payment, using an available instalment offer, waiting, or not proceeding.
 
-- A friendly Streamlit calculator for one purchase
-- A batch agent that reads the original challenge CSV files and produces the exact `output.csv` schema
+[Try the live app](https://buy-or-wait-xf8arqodck2gxvkesbckb5.streamlit.app/) | [Watch the 10-second demo](docs/demo.mp4)
 
-## How the agent works
+![Buy or Wait decision screen](docs/screenshots/decision.jpg)
 
-1. It joins each request to the user's financial profile, events, payment options, messages and images.
-2. It converts foreign-currency events using the supplied dated exchange rates.
-3. It ignores unsafe evidence such as pending income, failed payments and unrealized investment values.
-4. It learns stable 5 to 24 day and monthly patterns from settled history, then builds a 90-day cash forecast. It uses recent medians for groceries and dining, longer history for transport, and six-payment averages for variable monthly bills.
-5. It tests full payment, exactly two partial payments, supplied installment offers, waiting and up to three permitted spending changes.
-6. It rejects any plan that misses the requested date or lets the balance fall below the user's chosen minimum.
-7. It writes and validates the eight required output columns.
+## The problem
 
-Money calculations use `Decimal`, not floating-point arithmetic. AI can read a missing amount from a linked image, but AI never makes the affordability decision.
+A bank balance can look healthy while rent, bills and other commitments are about to leave the account. Two people with the same balance may also need different advice because their income dates, minimum balance preferences and flexible expenses are different.
 
-## Run the Streamlit app locally
+Buy or Wait turns those details into a personalized 90-day forecast and a payment recommendation that must satisfy three rules:
+
+- The complete payment plan is achievable.
+- Essential expenses remain covered.
+- The projected balance never falls below the user's chosen minimum.
+
+## What it returns
+
+| Output | Meaning |
+| --- | --- |
+| `amount_safe_to_pay` | Maximum safe amount to pay today |
+| `affordability_status` | Affordable now, with a plan, later, or not within the forecast |
+| `recommended_payment_method` | Safest available way to pay |
+| `payment_plan` | Recommended dates and amounts |
+| `earliest_date_for_full_payment` | First safe date for one full payment |
+| `spending_changes_needed` | Optional expenses to stop or reduce |
+| `decision_explanation` | Short reason for the recommendation |
+
+## How it works
+
+```mermaid
+flowchart TD
+    A[Financial profile and purchase] --> B[Evidence normalizer]
+    B --> C[90-day cashflow forecast]
+    C --> D[Compare payment options]
+    D --> E{Balance stays above floor?}
+    E -->|Yes| F[Return safest valid plan]
+    E -->|No| G[Wait or do not proceed]
+```
+
+1. The agent joins each request to the user's financial profile, settled events, payment options, messages and linked images.
+2. It normalizes dated foreign-currency events and rejects unsafe evidence such as pending income, failed payments and unrealized investment values.
+3. It learns recurring patterns from settled history and builds a daily 90-day cashflow forecast.
+4. It tests full payment, exactly two partial payments, supplied instalment offers, waiting and up to three allowed spending changes.
+5. It rejects any plan that misses the deadline or takes the balance below the user's safety floor.
+6. It writes and validates the exact challenge output schema.
+
+All money calculations use Python `Decimal`. AI is used to extract purchase or evidence details from natural language and images. The affordability decision itself is deterministic, testable and explainable.
+
+## Product experience
+
+The Streamlit app supports manual entry without an API key. With Gemini configured, a user can also write a request such as “Can I buy a £900 laptop before 9 December?” and optionally attach a product listing, bill or receipt.
+
+| Purchase details | Recommendation | Forecast |
+| --- | --- | --- |
+| ![Purchase input](docs/screenshots/input.jpg) | ![Decision summary](docs/screenshots/decision.jpg) | ![90-day forecast](docs/screenshots/forecast.jpg) |
+
+## Measured results
+
+The reproducible public evaluation runs all 25 solved sample requests from the original challenge. These are measured results, not claims about hidden test data.
+
+| Metric | Result |
+| --- | ---: |
+| Affordability status accuracy | 80% |
+| Recommended payment method accuracy | 84% |
+| Payment plan accuracy | 80% |
+| Earliest full-payment date accuracy | 84% |
+| Amount within 5% of request | 88% |
+| Mean request-normalized amount error | 2.95% |
+| Automated tests | 21 passing |
+
+Exact monetary equality is the main remaining improvement area. The evaluation pipeline reports exact-row accuracy, per-field accuracy and normalized amount error so future changes can be compared without hardcoded answers.
+
+## Run locally
 
 Requires Python 3.12.
 
 ```bash
+git clone https://github.com/tayebakhan/buy-or-wait.git
+cd buy-or-wait
 python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install -r requirements.txt
 python3 -m streamlit run app.py
 ```
 
-## Run the challenge dataset
+Manual entry works immediately. To enable AI extraction, create `.streamlit/secrets.toml`:
 
-Download the original challenge data and place its CSV files and `media/` folder inside a local `dataset/` directory. The dataset is intentionally not committed to this portfolio repository.
+```toml
+GEMINI_API_KEY = "your-key-from-google-ai-studio"
+GEMINI_MODEL = "gemini-2.5-flash"
+```
+
+Never commit a real key. The app sends only the purchase message, optional uploaded image, current date and currency context to Gemini. Sidebar balances and bills are not sent.
+
+## Run the batch agent
+
+Download the original challenge data and place the CSV files and `media/` folder inside `dataset/`. The dataset is intentionally excluded from this repository.
 
 ```bash
 python3 code/main.py --dataset dataset --output output.csv
 ```
 
-The command stops with a clear error if a required file or column is missing. On success it checks the output column order, request IDs, labels, dates, payment-plan format and spending-change format.
+The command validates required files, input columns, output column order, request IDs, labels, dates, payment plans and spending changes.
 
-If an event amount is only available in an image, set `GEMINI_API_KEY`. To make repeated runs cheaper and reproducible, you may instead create `dataset/evidence_cache.json`:
+If an event amount exists only in an image, set `GEMINI_API_KEY` or add a human-verified value to `dataset/evidence_cache.json`:
 
 ```json
 {
@@ -50,67 +120,39 @@ If an event amount is only available in an image, set `GEMINI_API_KEY`. To make 
 }
 ```
 
-Only cache a value after checking the linked image yourself.
-
-## Evaluate against the solved samples
-
-First generate predictions for the sample request rows, then compare them with the completed columns in `sample_requests.csv`:
+## Evaluate and test
 
 ```bash
 python3 evaluation/evaluate.py \
   --predictions sample_output.csv \
   --expected dataset/sample_requests.csv
-```
 
-This creates `evaluation/report.md` and `evaluation/report.json` with exact-row and per-field accuracy. Equivalent money formats such as `100` and `100.00` are treated as equal. It also reports request-normalized monetary error and the share of predictions within 1% and 5% of the requested amount. Free-text explanations are excluded from exact matching.
-
-The reproducible public-sample workflow currently scores 25 solved requests at 80% for affordability status, 84% for the recommended payment method, 80% for the payment plan and 84% for the earliest full-payment date. For `amount_safe_to_pay`, the mean request-normalized error is 2.95%, 52% of predictions are within 1% of the requested amount and 88% are within 5%. Exact monetary equality remains the main improvement area.
-
-Before presenting a final full-dataset run, complete `evaluation/usage_report.md` with the actual provider calls, tokens and cost. The deterministic forecasting engine itself makes zero model calls.
-
-## What is included
-
-- Natural-language and image extraction for product listings, bills, receipts and payment messages
-- Exact challenge CSV ingestion and output validation
-- Dated currency conversion
-- Conflict handling for linked, cancelled, failed, settled and pending records
-- Common explicit message amendments for amounts, salary dates, payroll arrears, rent rises, retried bills and confirmed transfers between a user's own accounts
-- One-cycle reduced salary handling and confirmed provider invoice income
-- Recurring cashflow inference from settled history
-- Full, partial, installment, delayed and flexible-spending comparisons
-- A payment schedule, earliest full-payment date and 90-day balance forecast
-- A public-sample evaluation workflow
-- Automated tests and GitHub Actions checks
-
-## Current limitations
-
-This is a measured reproducible baseline, not a claim of perfect hidden-test accuracy. Message wording outside the supported explicit patterns may need a richer multilingual evidence normalizer. Image extraction also needs either a Gemini key or a reviewed cache entry. The local cache builder compares standard and sparse OCR layout modes to reduce missed printed and handwritten receipt totals. The public workflow reruns all 25 solved samples after relevant engine changes so improvements can be measured without hardcoding answers.
-
-The app and batch engine do not connect to a bank. Results are estimates based only on the supplied information and are not financial advice.
-
-## Streamlit deployment
-
-In Streamlit Community Cloud, select:
-
-- Repository: `tayebakhan/buy-or-wait`
-- Branch: `main`
-- Entry point: `app.py`
-- Python: `3.12`
-
-Manual entry needs no API key. To enable AI, add these values in the app's Streamlit settings under Secrets:
-
-```toml
-GEMINI_API_KEY = "your-key-from-google-ai-studio"
-GEMINI_MODEL = "gemini-2.5-flash"
-```
-
-Never commit real keys. In the Streamlit app, only the purchase message, optional uploaded image, current date and currency context go to Gemini. Sidebar balances and bills are not sent. JPG, PNG and WebP uploads are limited to 5 MB and processed in memory.
-
-## Checks
-
-```bash
 python3 -m unittest discover -s tests -v
 ```
+
+The evaluator creates Markdown and JSON reports. Equivalent money formats such as `100` and `100.00` are treated as equal, while free-text explanations are excluded from exact matching.
+
+## Repository guide
+
+```text
+app.py                       Streamlit interface
+engine.py                    Interactive recommendation engine
+forecast.py                  Daily balance simulation
+scenario.py                  Typed scenario models
+buy_or_wait/batch.py         Challenge dataset agent
+code/main.py                 Batch command-line entry point
+evaluation/                  Reproducible scoring and evidence tools
+tests/                       Unit and integration tests
+docs/                        Screenshots, demo and portfolio copy
+```
+
+## Safety and limitations
+
+- This project does not connect to a bank or move money.
+- Results are estimates based on supplied information and are not financial advice.
+- Pending income, failed payments and unrealized assets are not treated as spendable cash.
+- Image extraction requires Gemini or a reviewed local cache.
+- Unsupported message wording may require a richer evidence normalizer.
 
 ## Origin
 

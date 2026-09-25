@@ -28,6 +28,14 @@ class EvidenceCacheTests(unittest.TestCase):
         ]
         self.assertEqual(extract_consensus_amount(texts, "Grocery receipt"), Decimal("2298"))
 
+    def test_recovers_a_noisy_handwritten_total_from_sparse_ocr(self):
+        primary = ["TOTAL 45", "TOTAL 545", "TOTAL 45"]
+        sparse = ["TOTAL 4-543|0P", "TOTAL 4-543|0P"]
+        self.assertEqual(
+            extract_consensus_amount(primary, "Pharmacy receipt", sparse_texts=sparse),
+            Decimal("4543"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

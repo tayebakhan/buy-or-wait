@@ -74,7 +74,7 @@ Before presenting a final full-dataset run, complete `evaluation/usage_report.md
 - Exact challenge CSV ingestion and output validation
 - Dated currency conversion
 - Conflict handling for linked, cancelled, failed, settled and pending records
-- Common explicit message amendments for amounts, salary dates, payroll arrears, rent rises and retried bills
+- Common explicit message amendments for amounts, salary dates, payroll arrears, rent rises, retried bills and confirmed transfers between a user's own accounts
 - One-cycle reduced salary handling and confirmed provider invoice income
 - Recurring cashflow inference from settled history
 - Full, partial, installment, delayed and flexible-spending comparisons
@@ -84,7 +84,7 @@ Before presenting a final full-dataset run, complete `evaluation/usage_report.md
 
 ## Current limitations
 
-This is a measured reproducible baseline, not a claim of perfect hidden-test accuracy. Message wording outside the supported explicit patterns may need a richer multilingual evidence normalizer. Image extraction also needs either a Gemini key or a reviewed cache entry. The local cache builder compares several OCR layout modes to reduce missed receipt totals. The public workflow reruns all 25 solved samples after relevant engine changes so improvements can be measured without hardcoding answers.
+This is a measured reproducible baseline, not a claim of perfect hidden-test accuracy. Message wording outside the supported explicit patterns may need a richer multilingual evidence normalizer. Image extraction also needs either a Gemini key or a reviewed cache entry. The local cache builder compares standard and sparse OCR layout modes to reduce missed printed and handwritten receipt totals. The public workflow reruns all 25 solved samples after relevant engine changes so improvements can be measured without hardcoding answers.
 
 The app and batch engine do not connect to a bank. Results are estimates based only on the supplied information and are not financial advice.
 

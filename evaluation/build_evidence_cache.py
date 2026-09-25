@@ -37,6 +37,20 @@ def normalize_number(raw: str) -> Decimal | None:
     return amount if amount > 0 else None
 
 
+def noisy_handwritten_total(line: str, label: str) -> Decimal | None:
+    """Recover a handwritten total when OCR mixes digits and pen strokes."""
+    suffix = line[line.lower().find(label) + len(label):].strip()
+    if not re.search(r"[|/]\s*[0oO]\s*[pP]\s*$", suffix):
+        return None
+    suffix = re.sub(r"[|/]?\s*[0oO]\s*[pP]\s*$", "", suffix)
+    suffix = suffix.translate(str.maketrans({"s": "5", "S": "5", "o": "0", "O": "0"}))
+    digits = "".join(re.findall(r"\d", suffix))
+    if len(digits) < 3:
+        return None
+    amount = Decimal(digits)
+    return amount if amount < Decimal("1000000000000") else None
+
+
 def extract_amount(text: str, description: str = "", category: str = "", direction: str = "") -> Decimal:
     context = f"{description} {category}".lower()
     if direction.lower() == "credit" or re.search(r"salary|payroll|income", context):
@@ -52,6 +66,9 @@ def extract_amount(text: str, description: str = "", category: str = "", directi
         for index, line in enumerate(lines):
             if label not in line.lower():
                 continue
+            handwritten = noisy_handwritten_total(line, label)
+            if handwritten is not None:
+                return handwritten
             position = line.lower().find(label) + len(label)
             nearby = line[position:]
             if not re.search(NUMBER, nearby) and index + 1 < len(lines):
@@ -93,15 +110,35 @@ def extract_amount(text: str, description: str = "", category: str = "", directi
 
 
 def extract_consensus_amount(
-    texts: list[str], description: str = "", category: str = "", direction: str = ""
+    texts: list[str], description: str = "", category: str = "", direction: str = "",
+    sparse_texts: list[str] | None = None,
 ) -> Decimal:
     """Prefer an amount independently found by multiple OCR layout modes."""
-    candidates = []
-    for text in texts:
-        try:
-            candidates.append(extract_amount(text, description, category, direction))
-        except ValueError:
-            continue
+    def candidates_for(items: list[str]) -> list[Decimal]:
+        candidates = []
+        for text in items:
+            try:
+                candidates.append(extract_amount(text, description, category, direction))
+            except ValueError:
+                continue
+        return candidates
+
+    sparse_items = sparse_texts or []
+    sparse_candidates = candidates_for(sparse_items)
+    handwritten_markers = [
+        bool(re.search(r"\btotal\b[^\n]*[|/]\s*[0oO]\s*[pP]\s*$", text, re.IGNORECASE | re.MULTILINE))
+        for text in sparse_items
+    ]
+    if (
+        len(sparse_candidates) >= 2
+        and len(set(sparse_candidates)) == 1
+        and len(handwritten_markers) == len(sparse_candidates)
+        and all(handwritten_markers)
+    ):
+        return sparse_candidates[0]
+    candidates = candidates_for(texts)
+    if not candidates:
+        candidates = sparse_candidates
     if not candidates:
         raise ValueError("No positive amount found in OCR text")
     counts = Counter(candidates)
@@ -133,12 +170,22 @@ def main(argv: list[str] | None = None) -> int:
                     text=True,
                 )
                 texts.append(result.stdout)
+            sparse_texts = []
+            for page_mode in ("11", "12"):
+                result = subprocess.run(
+                    ["tesseract", str(path), "stdout", "--psm", page_mode],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                sparse_texts.append(result.stdout)
             event = events.get(row.get("related_event_id", ""), {})
             amount = extract_consensus_amount(
                 texts,
                 event.get("description", ""),
                 event.get("category", ""),
                 event.get("direction", ""),
+                sparse_texts,
             )
             cache[image_id] = {"amount": f"{amount:.2f}"}
             print(f"{image_id}: {amount:.2f}")

@@ -219,6 +219,30 @@ class BatchEngineTests(unittest.TestCase):
             [(flow.when, flow.amount) for flow in flows if flow.event_id == "failed_bill"],
         )
 
+    def test_ignores_a_bank_confirmed_transfer_between_own_accounts(self):
+        event_path = self.root / "financial_events.csv"
+        with event_path.open(newline="", encoding="utf-8") as handle:
+            fieldnames = csv.DictReader(handle).fieldnames
+        with event_path.open("a", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            for event_id, direction in (("own_transfer_out", "debit"), ("own_transfer_in", "credit")):
+                writer.writerow({
+                    "event_id": event_id, "user_id": "full", "event_type": "transfer",
+                    "description": "Account transfer", "category": "transfer", "direction": direction,
+                    "amount": "250", "currency": "GBP", "event_date": "2026-08-30",
+                    "settlement_date": "2026-08-30", "status": "settled", "linked_event_id": "",
+                    "flexibility": "fixed", "minimum_allowed_amount": "",
+                })
+        write_csv(self.root, "messages.csv", ["message_id", "user_id", "request_id", "related_event_id", "sent_at", "source_type", "message_text"], [{
+            "message_id": "own_transfer", "user_id": "full", "request_id": "r_full", "related_event_id": "",
+            "sent_at": "2026-08-31T09:00:00Z", "source_type": "bank",
+            "message_text": "The matching debit and credit came from a transfer between your two accounts.",
+        }])
+        flows, events = DecisionEngine(Dataset.load(self.root))._cashflows("full", date(2026, 9, 1), "GBP")
+        self.assertNotIn("own_transfer_out", events)
+        self.assertNotIn("own_transfer_in", events)
+        self.assertFalse(any(flow.event_id.startswith("own_transfer") for flow in flows))
+
 
 if __name__ == "__main__":
     unittest.main()

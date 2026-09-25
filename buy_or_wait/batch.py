@@ -369,6 +369,12 @@ class DecisionEngine:
                 percentage = Decimal(next(value for value in rent_increase.groups() if value is not None))
                 payroll["rent_multiplier"] = str(Decimal("1") + percentage / Decimal("100"))
                 payroll["rent_change_date"] = row.get("sent_at", "")[:10]
+            if source == "bank" and re.search(
+                r"matching debit and credit.*transfer between your two accounts|"
+                r"debit dan kredit dengan jumlah yang sama.*transfer antara dua rekening",
+                lower,
+            ):
+                payroll["internal_transfer_notice_date"] = row.get("sent_at", "")[:10]
             suppresses_earnings = (
                 source in {"employer", "service_provider"}
                 and re.search(
@@ -388,6 +394,30 @@ class DecisionEngine:
         user_events = [dict(row) for row in self.data.events if row["user_id"] == user_id]
         for event in user_events:
             event.update(direct_updates.get(event["event_id"], {}))
+        internal_transfer_ids: set[str] = set()
+        if payroll_update.get("internal_transfer_notice_date"):
+            notice_day = day(payroll_update["internal_transfer_notice_date"])
+            recent = [
+                event for event in user_events
+                if notice_day - timedelta(days=14)
+                <= day(event.get("settlement_date") or event.get("event_date"))
+                <= notice_day
+                and event.get("amount", "").strip()
+                and event.get("status", "").lower() in {"settled", "completed", "paid"}
+            ]
+            for debit in (event for event in recent if event.get("direction", "").lower() == "debit"):
+                debit_day = day(debit.get("settlement_date") or debit.get("event_date"))
+                matches = [
+                    credit for credit in recent
+                    if credit.get("direction", "").lower() == "credit"
+                    and credit.get("currency", "").upper() == debit.get("currency", "").upper()
+                    and money(credit["amount"]) == money(debit["amount"])
+                    and abs((day(credit.get("settlement_date") or credit.get("event_date")) - debit_day).days) <= 1
+                ]
+                if len(matches) == 1:
+                    internal_transfer_ids.update((debit["event_id"], matches[0]["event_id"]))
+        if internal_transfer_ids:
+            user_events = [event for event in user_events if event["event_id"] not in internal_transfer_ids]
         by_id = {row["event_id"]: row for row in user_events}
         ignored = {"cancelled", "canceled", "failed", "rejected", "void"}
         terminal_by_link = {

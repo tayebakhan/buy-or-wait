@@ -6,7 +6,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-from buy_or_wait.batch import Dataset, DecisionEngine, OUTPUT_COLUMNS, forecast_recurring_amount, run, validate_output
+from buy_or_wait.batch import Cashflow, Dataset, DecisionEngine, OUTPUT_COLUMNS, forecast_recurring_amount, run, validate_output
 
 
 def write_csv(root, name, fieldnames, rows):
@@ -23,7 +23,35 @@ class BatchEngineTests(unittest.TestCase):
         self.assertEqual(forecast_recurring_amount("transport", values), Decimal("41.00"))
         self.assertEqual(forecast_recurring_amount("dining", values), Decimal("50.00"))
         self.assertEqual(forecast_recurring_amount("utilities", values), Decimal("40.70"))
+        self.assertEqual(forecast_recurring_amount("shopping", values), Decimal("45.00"))
+        self.assertEqual(forecast_recurring_amount("entertainment", values), Decimal("45.00"))
         self.assertEqual(forecast_recurring_amount("rent", values), Decimal("50.00"))
+
+    def test_reducing_an_expense_never_increases_a_lower_forecast(self):
+        low = DecisionEngine._lowest_balance(
+            Decimal("500"),
+            [
+                Cashflow("flexible", date(2026, 9, 2), Decimal("50"), "debit", "shopping", True)
+            ],
+            (),
+            reduced={"flexible": Decimal("100")},
+        )
+        self.assertEqual(low, Decimal("450.00"))
+
+    def test_flexible_change_limit_keeps_the_largest_savings(self):
+        profile = {"expense_categories_user_is_willing_to_stop": "optional"}
+        flows = [
+            Cashflow(f"event_{index}", date(2026, 9, 2), Decimal(index), "debit", "optional", True)
+            for index in range(1, 10)
+        ]
+        events = {
+            f"event_{index}": {"category": "optional", "flexibility": "stoppable"}
+            for index in range(1, 10)
+        }
+        change_sets = DecisionEngine._change_sets(None, profile, flows, events)
+        single_changes = {changes[0] for changes, _, _ in change_sets if len(changes) == 1}
+        self.assertIn("stop:event_9", single_changes)
+        self.assertNotIn("stop:event_1", single_changes)
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

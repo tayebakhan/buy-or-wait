@@ -113,6 +113,15 @@ def _round_significant(value: Decimal, digits: int) -> Decimal:
     return value.quantize(quantum, rounding=ROUND_HALF_UP)
 
 
+def _percentile(values: list[Decimal], percentile: Decimal) -> Decimal:
+    ordered = sorted(values)
+    position = Decimal(len(ordered) - 1) * percentile
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = position - lower
+    return ordered[lower] * (Decimal("1") - weight) + ordered[upper] * weight
+
+
 def forecast_recurring_amount(category: str, amounts: list[Decimal]) -> Decimal:
     """Estimate a recurring debit from the most useful history for its category."""
     if not amounts:
@@ -122,7 +131,9 @@ def forecast_recurring_amount(category: str, amounts: list[Decimal]) -> Decimal:
         estimate = _round_significant(Decimal(str(median(amounts[-3:]))), 2)
     elif category == "transport":
         estimate = _round_significant(sum(amounts, ZERO) / len(amounts), 2)
-    elif category in {"utilities", "healthcare", "shopping", "entertainment"}:
+    elif category in {"shopping", "entertainment"}:
+        estimate = _percentile(amounts[-6:], Decimal("0.70"))
+    elif category in {"utilities", "healthcare"}:
         recent = amounts[-6:]
         estimate = _round_significant(sum(recent, ZERO) / len(recent), 3)
     else:
@@ -628,7 +639,11 @@ class DecisionEngine:
         ledger: dict[date, list[Decimal]] = defaultdict(list)
         for flow in flows:
             if flow.event_id not in removed:
-                value = reduced.get(flow.event_id, flow.amount) if flow.direction == "debit" else flow.amount
+                value = (
+                    min(flow.amount, reduced[flow.event_id])
+                    if flow.direction == "debit" and flow.event_id in reduced
+                    else flow.amount
+                )
                 ledger[flow.when].append(value if flow.direction == "credit" else -value)
         for when, amount in payments:
             ledger[when].append(-amount)
@@ -660,17 +675,20 @@ class DecisionEngine:
     ) -> list[tuple[tuple[str, ...], set[str], dict[str, Decimal]]]:
         stoppable_categories = split_values(profile.get("expense_categories_user_is_willing_to_stop"))
         reducible_categories = split_values(profile.get("expense_categories_user_is_willing_to_reduce"))
-        candidates: list[tuple[str, str, Decimal | None]] = []
+        candidates: list[tuple[str, str, Decimal | None, Decimal]] = []
         for event_id in sorted({flow.event_id for flow in flows if flow.direction == "debit" and flow.inferred}):
             event = events.get(event_id, {})
             category = event.get("category", "").lower()
             flexibility = event.get("flexibility", "").lower()
+            matching = [flow.amount for flow in flows if flow.event_id == event_id and flow.direction == "debit"]
             if category in stoppable_categories and ("stoppable" in flexibility or flexibility in {"flexible", "optional"}):
-                candidates.append((f"stop:{event_id}", event_id, None))
+                candidates.append((f"stop:{event_id}", event_id, None, sum(matching, ZERO)))
             if category in reducible_categories and ("reducible" in flexibility or flexibility == "flexible"):
                 minimum = money(event.get("minimum_allowed_amount"), blank=ZERO)
-                candidates.append((f"reduce_to:{event_id}:{fmt(minimum)}", event_id, minimum))
-        candidates = candidates[:8]
+                saving = sum((max(ZERO, amount - minimum) for amount in matching), ZERO)
+                if saving > ZERO:
+                    candidates.append((f"reduce_to:{event_id}:{fmt(minimum)}", event_id, minimum, saving))
+        candidates = sorted(sorted(candidates, key=lambda item: (-item[3], item[0]))[:8], key=lambda item: item[0])
         result: list[tuple[tuple[str, ...], set[str], dict[str, Decimal]]] = [((), set(), {})]
         for count in range(1, min(3, len(candidates)) + 1):
             for group in combinations(candidates, count):

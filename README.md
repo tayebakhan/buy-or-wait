@@ -64,7 +64,7 @@ python3 evaluation/evaluate.py \
 
 This creates `evaluation/report.md` and `evaluation/report.json` with exact-row and per-field accuracy. Equivalent money formats such as `100` and `100.00` are treated as equal. It also reports request-normalized monetary error and the share of predictions within 1% and 5% of the requested amount. Free-text explanations are excluded from exact matching.
 
-The reproducible public-sample workflow currently scores 25 solved requests at 80% for affordability status, 84% for the recommended payment method, 80% for the payment plan and 84% for the earliest full-payment date. For `amount_safe_to_pay`, the mean request-normalized error is 2.99%, 52% of predictions are within 1% of the requested amount and 88% are within 5%. Exact monetary equality remains the main improvement area.
+The reproducible public-sample workflow currently scores 25 solved requests at 80% for affordability status, 84% for the recommended payment method, 80% for the payment plan and 84% for the earliest full-payment date. For `amount_safe_to_pay`, the mean request-normalized error is 2.95%, 52% of predictions are within 1% of the requested amount and 88% are within 5%. Exact monetary equality remains the main improvement area.
 
 Before presenting a final full-dataset run, complete `evaluation/usage_report.md` with the actual provider calls, tokens and cost. The deterministic forecasting engine itself makes zero model calls.
 
